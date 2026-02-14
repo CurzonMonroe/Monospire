@@ -1,24 +1,5 @@
 # Monospire
 
-Monospire is a native-feeling macOS desktop Markdown editor built with Electron.
-
-## Features
-
-- `Raw Markdown`, `Formatted Markdown`, and `Side by side` views
-- Edit from either pane with bidirectional sync
-- Low-flash rendering updates using DOM patching (`morphdom`)
-- Native-style menus (`File`, `Edit`, `View`, `Tools`) and in-window ribbon
-- Edit menu includes standard edit operations and a Markdown Format section
-- Ribbon is dedicated to Markdown formatting actions
-- File operations: `New`, `Load`, `Save`, `Save As`, `Exit`
-- Unsaved-change confirmation on close, load, and new document
-- Per-view zoom controls (raw and formatted)
-- Theme CSS loading (`.css`) for standard Markdown HTML styling
-- Ribbon display options: `Icons only`, `Text only`, `Icons and Text`
-- Light/dark mode switching
-- About dialog with version details
-- Draggable custom title bar with file name state
-
 ## Run
 
 1. Install dependencies:
