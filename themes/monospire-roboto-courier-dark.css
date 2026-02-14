@@ -1,0 +1,141 @@
+/* Monospire Roboto + Courier Dark Theme */
+
+@import url('https://fonts.googleapis.com/css2?family=Roboto:wght@400;500;700&display=swap');
+
+:root {
+  --bg: #121419;
+  --text: #e7eaf0;
+  --muted: #b0b8c6;
+  --link: #8eb8ff;
+  --rule: #303846;
+  --code-bg: #1b2029;
+  --code-border: #2f3746;
+}
+
+html,
+body {
+  background: var(--bg);
+  color: var(--text);
+  font-family: 'Roboto', 'Helvetica Neue', Helvetica, Arial, sans-serif;
+  line-height: 1.6;
+}
+
+body {
+  margin: 0;
+  padding: 1.4rem;
+}
+
+h1,
+h2,
+h3,
+h4,
+h5,
+h6 {
+  font-family: 'Roboto', 'Helvetica Neue', Helvetica, Arial, sans-serif;
+  color: #f6f8fc;
+  line-height: 1.3;
+  margin: 1.3rem 0 0.65rem;
+  font-weight: 700;
+}
+
+h1 { font-size: 2rem; margin-top: 0; }
+h2 { font-size: 1.6rem; }
+h3 { font-size: 1.32rem; }
+h4, h5, h6 { font-size: 1.08rem; }
+
+p,
+ul,
+ol,
+blockquote,
+pre,
+table {
+  margin: 0 0 1rem;
+}
+
+a,
+a:visited {
+  color: var(--link);
+  text-decoration: none;
+}
+
+a:hover,
+a:focus {
+  text-decoration: underline;
+}
+
+hr {
+  border: 0;
+  border-top: 1px solid var(--rule);
+  margin: 1.5rem 0;
+}
+
+blockquote {
+  margin-left: 0;
+  padding: 0.7rem 0.9rem;
+  border-left: 4px solid #4a556b;
+  background: #1a202a;
+  color: #d4dbeb;
+}
+
+code {
+  font-family: 'Courier New', Courier, 'Nimbus Mono L', monospace;
+  background: var(--code-bg);
+  border: 1px solid var(--code-border);
+  border-radius: 4px;
+  padding: 0.06em 0.35em;
+  font-size: 0.92em;
+}
+
+pre {
+  font-family: 'Courier New', Courier, 'Nimbus Mono L', monospace;
+  background: var(--code-bg);
+  border: 1px solid var(--code-border);
+  border-radius: 8px;
+  padding: 0.85rem 1rem;
+  overflow-x: auto;
+}
+
+pre code {
+  background: transparent;
+  border: 0;
+  padding: 0;
+  border-radius: 0;
+}
+
+ul,
+ol {
+  padding-left: 1.35rem;
+}
+
+li {
+  margin: 0.25rem 0;
+}
+
+table {
+  border-collapse: collapse;
+  width: 100%;
+  font-size: 0.95rem;
+}
+
+th,
+td {
+  border: 1px solid #2f3746;
+  padding: 0.45rem 0.6rem;
+  text-align: left;
+}
+
+th {
+  background: #1a202a;
+}
+
+mark {
+  background: #6e5b00;
+  color: #fff5c9;
+}
+
+img,
+video,
+iframe {
+  max-width: 100%;
+  height: auto;
+}

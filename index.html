@@ -1,0 +1,331 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Monospire</title>
+    <link rel="stylesheet" href="./styles.css" />
+  </head>
+  <body class="theme-light ribbon-both">
+    <div class="app-shell">
+      <header class="titlebar" id="titlebar">
+        <div class="titlebar-spacer"></div>
+        <div class="titlebar-text" id="titlebar-text">Monospire - Untitled.md</div>
+      </header>
+
+      <nav class="menu-bar no-drag" id="menu-bar">
+        <div class="menu-group">
+          <button class="menu-trigger" data-menu="file">File</button>
+          <div class="menu-dropdown" data-dropdown="file">
+            <button data-action="file-new"><span class="menu-item-main"><img class="menu-item-icon" src="./assets/sf-symbols/new.png" alt="" aria-hidden="true" />New</span><span class="shortcut">⌘N</span></button>
+            <button data-action="file-new-window"><span class="menu-item-main"><img class="menu-item-icon" src="./assets/sf-symbols/new.png" alt="" aria-hidden="true" />New Window</span><span class="shortcut">⇧⌘N</span></button>
+            <button data-action="file-new-from-template"><span class="menu-item-main"><img class="menu-item-icon" src="./assets/sf-symbols/new.png" alt="" aria-hidden="true" />New from Template...</span><span class="shortcut">⌥⌘N</span></button>
+            <div class="menu-separator"></div>
+            <button data-action="file-set-default-template">Set Default Template...</button>
+            <button data-action="file-reset-default-template">Reset Default Template</button>
+            <div class="menu-separator"></div>
+            <button data-action="file-load"><span class="menu-item-main"><img class="menu-item-icon" src="./assets/sf-symbols/open.png" alt="" aria-hidden="true" />Open...</span><span class="shortcut">⌘O</span></button>
+            <div class="menu-subheader menu-item-main"><img class="menu-item-icon" src="./assets/sf-symbols/recent.png" alt="" aria-hidden="true" />Open Recent</div>
+            <div id="recent-files-menu"></div>
+            <button data-action="file-clear-recent"><span class="menu-item-main"><img class="menu-item-icon" src="./assets/sf-symbols/recent.png" alt="" aria-hidden="true" />Clear Menu</span></button>
+            <div class="menu-separator"></div>
+            <button data-action="file-save"><span>Save</span><span class="shortcut">⌘S</span></button>
+            <button data-action="file-save-as"><span>Export...</span><span class="shortcut">⇧⌘S</span></button>
+            <button data-action="open-version-history">Version History...</button>
+            <div class="menu-separator"></div>
+            <button data-action="app-exit"><span>Exit</span><span class="shortcut">⌘Q</span></button>
+          </div>
+        </div>
+
+        <div class="menu-group">
+          <button class="menu-trigger" data-menu="edit">Edit</button>
+          <div class="menu-dropdown" data-dropdown="edit">
+            <button data-action="edit-undo"><span>Undo</span><span class="shortcut">⌘Z</span></button>
+            <button data-action="edit-redo"><span>Redo</span><span class="shortcut">⇧⌘Z</span></button>
+            <div class="menu-separator"></div>
+            <button data-action="edit-cut"><span>Cut</span><span class="shortcut">⌘X</span></button>
+            <button data-action="edit-copy"><span>Copy</span><span class="shortcut">⌘C</span></button>
+            <button data-action="edit-paste"><span>Paste</span><span class="shortcut">⌘V</span></button>
+            <button data-action="edit-select-all"><span>Select All</span><span class="shortcut">⌘A</span></button>
+            <div class="menu-separator"></div>
+            <button data-action="edit-find"><span>Find...</span><span class="shortcut">⌘F</span></button>
+            <button data-action="edit-replace"><span>Replace...</span><span class="shortcut">⌥⌘F</span></button>
+            <button data-action="open-command-palette"><span>Command Palette...</span><span class="shortcut">⇧⌘P</span></button>
+            <div class="menu-separator"></div>
+            <div class="menu-subheader">Format</div>
+            <button data-action="format-bold"><span>Bold</span><span class="shortcut">⌘B</span></button>
+            <button data-action="format-italic"><span>Italic</span><span class="shortcut">⌘I</span></button>
+            <button data-action="format-inline-code"><span>Inline Code</span><span class="shortcut">⌘E</span></button>
+            <button data-action="format-code-block">Code Block</button>
+            <button data-action="format-highlight">Highlight</button>
+            <button data-action="format-horizontal-rule">Horizontal Line</button>
+            <button data-action="format-increase-indent">Increase Indent</button>
+            <button data-action="format-decrease-indent">Decrease Indent</button>
+            <button data-action="format-heading-1">Heading 1</button>
+            <button data-action="format-heading-2">Heading 2</button>
+            <button data-action="format-heading-3">Heading 3</button>
+            <button data-action="format-list-bullet">Bulleted List</button>
+            <button data-action="format-list-number">Numbered List</button>
+            <button data-action="format-quote">Blockquote</button>
+            <button data-action="format-link">Link</button>
+          </div>
+        </div>
+
+        <div class="menu-group">
+          <button class="menu-trigger" data-menu="view">View</button>
+          <div class="menu-dropdown" data-dropdown="view">
+            <button data-action="toggle-raw-view" data-toggle="raw">Show Markdown Editor</button>
+            <button data-action="toggle-formatted-view" data-toggle="formatted">Show Preview</button>
+            <div class="menu-separator"></div>
+            <div class="menu-subheader">Zoom</div>
+            <div class="menu-subheader">Markdown Editor</div>
+            <button data-action="zoom-raw-in"><span>Markdown Editor Zoom In</span><span class="shortcut">⌘+</span></button>
+            <button data-action="zoom-raw-out"><span>Markdown Editor Zoom Out</span><span class="shortcut">⌘-</span></button>
+            <button data-action="zoom-raw-reset"><span>Reset Markdown Editor Zoom</span><span class="shortcut">⌘0</span></button>
+            <div class="menu-separator"></div>
+            <div class="menu-subheader">Preview</div>
+            <button data-action="zoom-formatted-in">Preview Zoom In</button>
+            <button data-action="zoom-formatted-out">Preview Zoom Out</button>
+            <button data-action="zoom-formatted-reset">Reset Preview Zoom</button>
+            <div class="menu-separator"></div>
+            <button data-action="toggle-sync-views" data-toggle="sync-views">Syncronise Views</button>
+            <div class="menu-separator"></div>
+            <button data-action="toggle-outline-view" data-toggle="outline-view">Show Outline</button>
+            <button data-action="outline-left" data-toggle="outline-left">Outline Left</button>
+            <button data-action="outline-right" data-toggle="outline-right">Outline Right</button>
+            <div class="menu-separator"></div>
+            <button data-action="horizontal-view" data-toggle="horizontal-view">Horizontal View</button>
+            <button data-action="vertical-view" data-toggle="vertical-view">Vertical View</button>
+          </div>
+        </div>
+
+        <div class="menu-group">
+          <button class="menu-trigger" data-menu="tools">Tools</button>
+          <div class="menu-dropdown" data-dropdown="tools">
+            <div class="menu-subheader">Document</div>
+            <button data-action="load-theme">Load Theme</button>
+            <button data-action="edit-front-matter">Edit Front Matter...</button>
+            <button data-action="check-links">Check Links...</button>
+            <button data-action="open-keybindings">Keyboard Shortcuts...</button>
+            <div class="menu-separator"></div>
+            <div class="menu-subheader">Export Presets</div>
+            <button data-action="set-export-html-preset" data-preset="default" data-toggle="export-html-default">HTML: Default</button>
+            <button data-action="set-export-html-preset" data-preset="article" data-toggle="export-html-article">HTML: Article</button>
+            <button data-action="set-export-html-preset" data-preset="compact" data-toggle="export-html-compact">HTML: Compact</button>
+            <div class="menu-separator"></div>
+            <button data-action="set-export-pdf-preset" data-preset="default" data-toggle="export-pdf-default">PDF Theme: Default</button>
+            <button data-action="set-export-pdf-preset" data-preset="serif" data-toggle="export-pdf-serif">PDF Theme: Serif</button>
+            <button data-action="set-export-pdf-preset" data-preset="dark" data-toggle="export-pdf-dark">PDF Theme: Dark</button>
+            <div class="menu-separator"></div>
+            <button data-action="set-export-docx-preset" data-preset="default" data-toggle="export-docx-default">DOCX Style: Default</button>
+            <button data-action="set-export-docx-preset" data-preset="classic" data-toggle="export-docx-classic">DOCX Style: Classic</button>
+            <button data-action="set-export-docx-preset" data-preset="report" data-toggle="export-docx-report">DOCX Style: Report</button>
+            <div class="menu-separator"></div>
+            <button data-action="set-export-pages-preset" data-preset="default" data-toggle="export-pages-default">Pages Preset: Default</button>
+            <button data-action="set-export-pages-preset" data-preset="manuscript" data-toggle="export-pages-manuscript">Pages Preset: Manuscript</button>
+            <button data-action="set-export-pages-preset" data-preset="presentation" data-toggle="export-pages-presentation">Pages Preset: Presentation</button>
+            <div class="menu-separator"></div>
+            <div class="menu-subheader">Interface</div>
+            <button data-action="ribbon-icons">Ribbon: Icons only</button>
+            <button data-action="ribbon-text">Ribbon: Text only</button>
+            <button data-action="ribbon-both">Ribbon: Icons and Text</button>
+            <button data-action="toggle-embedded-menu" data-toggle="embedded-menu">Display Menu in App</button>
+            <button data-action="toggle-dark-mode" data-toggle="dark-mode">Dark mode</button>
+            <button data-action="toggle-dark-mode-sync" data-toggle="dark-mode-sync">Sync Dark Mode with System</button>
+            <div class="menu-separator"></div>
+            <div class="menu-subheader">Proofing</div>
+            <button data-action="toggle-spellcheck" data-toggle="spellcheck">Spell Check</button>
+            <button data-action="dictionary-en-us" data-toggle="dictionary-en-us">Dictionary: English (US)</button>
+            <button data-action="dictionary-en-gb" data-toggle="dictionary-en-gb">Dictionary: English (UK)</button>
+            <div class="menu-separator"></div>
+            <div class="menu-subheader">Diagnostics</div>
+            <button data-action="toggle-mermaid-preview" data-toggle="mermaid-preview">Mermaid Preview (Experimental)</button>
+            <button data-action="toggle-theme-debug" data-toggle="theme-debug"><span>Show Theme Debug</span><span class="shortcut">⇧⌘D</span></button>
+            <button data-action="show-about">About Monospire</button>
+          </div>
+        </div>
+      </nav>
+
+      <section class="ribbon no-drag">
+        <div class="ribbon-group">
+          <div class="ribbon-label">Inline</div>
+          <button class="ribbon-button" data-action="format-bold" title="Bold">
+            <img src="./assets/sf-symbols/bold.png" alt="" aria-hidden="true" />
+            <span>Bold</span>
+          </button>
+          <button class="ribbon-button" data-action="format-italic" title="Italic">
+            <img src="./assets/sf-symbols/italic.png" alt="" aria-hidden="true" />
+            <span>Italic</span>
+          </button>
+          <button class="ribbon-button" data-action="format-inline-code" title="Inline Code">
+            <img src="./assets/sf-symbols/chevron.left.forwardslash.chevron.right.png" alt="" aria-hidden="true" />
+            <span>Code</span>
+          </button>
+          <button class="ribbon-button" data-action="format-highlight" title="Highlight">
+            <img src="./assets/sf-symbols/highlighter.png" alt="" aria-hidden="true" />
+            <span>Highlight</span>
+          </button>
+          <button class="ribbon-button" data-action="format-link" title="Link">
+            <img src="./assets/sf-symbols/link.png" alt="" aria-hidden="true" />
+            <span>Link</span>
+          </button>
+        </div>
+        <div class="ribbon-group">
+          <div class="ribbon-label">Block</div>
+          <button class="ribbon-button" data-action="format-heading-1" title="Heading 1">
+            <i class="ribbon-icon-glyph" aria-hidden="true">H1</i>
+            <span>H1</span>
+          </button>
+          <button class="ribbon-button" data-action="format-heading-2" title="Heading 2">
+            <i class="ribbon-icon-glyph" aria-hidden="true">H2</i>
+            <span>H2</span>
+          </button>
+          <button class="ribbon-button" data-action="format-list-bullet" title="Bulleted List">
+            <img src="./assets/sf-symbols/list.bullet.png" alt="" aria-hidden="true" />
+            <span>Bullets</span>
+          </button>
+          <button class="ribbon-button" data-action="format-list-number" title="Numbered List">
+            <img src="./assets/sf-symbols/list.number.png" alt="" aria-hidden="true" />
+            <span>Numbers</span>
+          </button>
+          <button class="ribbon-button" data-action="format-quote" title="Quote">
+            <img src="./assets/sf-symbols/quote.opening.png" alt="" aria-hidden="true" />
+            <span>Quote</span>
+          </button>
+          <button class="ribbon-button" data-action="format-code-block" title="Code Block">
+            <img src="./assets/sf-symbols/chevron.left.forwardslash.chevron.right.png" alt="" aria-hidden="true" />
+            <span>Code Block</span>
+          </button>
+          <button class="ribbon-button" data-action="format-horizontal-rule" title="Horizontal Line">
+            <i class="ribbon-icon-glyph" aria-hidden="true">―</i>
+            <span>H-Line</span>
+          </button>
+          <button class="ribbon-button" data-action="format-increase-indent" title="Increase Indent">
+            <img src="./assets/sf-symbols/increase.indent.png" alt="" aria-hidden="true" />
+            <span>Indent +</span>
+          </button>
+          <button class="ribbon-button" data-action="format-decrease-indent" title="Decrease Indent">
+            <img src="./assets/sf-symbols/decrease.indent.png" alt="" aria-hidden="true" />
+            <span>Indent -</span>
+          </button>
+        </div>
+        <div class="ribbon-tail">
+          <span class="ribbon-tail-label">Dark</span>
+          <label class="ribbon-switch" title="Toggle dark mode">
+            <input id="ribbon-dark-toggle" type="checkbox" aria-label="Toggle dark mode" />
+            <span class="ribbon-switch-slider"></span>
+          </label>
+        </div>
+      </section>
+
+      <div id="theme-debug" class="theme-debug no-drag">Theme debug: waiting...</div>
+
+      <main id="workspace" class="workspace mode-raw">
+        <section id="raw-pane" class="pane pane-raw">
+          <textarea id="raw-editor" spellcheck="true" aria-label="Raw Markdown editor"></textarea>
+        </section>
+
+        <section id="formatted-pane" class="pane pane-formatted">
+          <iframe id="formatted-frame" title="Formatted Markdown editor"></iframe>
+        </section>
+
+        <aside id="toc-pane" class="pane pane-toc no-drag" aria-label="Outline">
+          <div class="toc-header">Outline</div>
+          <div id="toc-list" class="toc-list"></div>
+        </aside>
+      </main>
+
+      <footer class="status-bar no-drag" id="status-bar">
+        <span id="status-last-saved">Last Saved: Never</span>
+        <span id="status-word-count">Words: 0</span>
+        <span id="status-char-count">Characters: 0</span>
+        <span id="status-image-count">Images: 0</span>
+      </footer>
+
+      <div id="command-palette" class="overlay-panel hidden no-drag" role="dialog" aria-modal="true" aria-label="Command Palette">
+        <div class="overlay-backdrop" data-action="close-command-palette"></div>
+        <div class="palette-sheet">
+          <input id="palette-input" class="palette-input" type="text" placeholder="Type a command..." />
+          <div id="palette-list" class="palette-list"></div>
+        </div>
+      </div>
+
+      <div id="front-matter-modal" class="overlay-panel hidden no-drag" role="dialog" aria-modal="true" aria-label="Front Matter">
+        <div class="overlay-backdrop" data-action="close-front-matter"></div>
+        <div class="front-matter-sheet">
+          <div class="front-matter-header">Front Matter</div>
+          <div id="front-matter-rows" class="front-matter-rows"></div>
+          <div class="front-matter-actions">
+            <button data-action="add-front-matter-row">Add Field</button>
+            <button data-action="save-front-matter">Save</button>
+            <button data-action="close-front-matter">Cancel</button>
+          </div>
+        </div>
+      </div>
+
+      <div id="find-replace-modal" class="overlay-panel hidden no-drag" role="dialog" aria-modal="true" aria-label="Find and Replace">
+        <div class="overlay-backdrop" data-action="close-find-replace"></div>
+        <div class="find-replace-sheet">
+          <div class="find-replace-header">Find and Replace</div>
+          <div class="find-replace-grid">
+            <label class="find-replace-label" for="find-input">Find</label>
+            <input id="find-input" class="find-replace-input" type="text" />
+            <label class="find-replace-label" for="replace-input">Replace</label>
+            <input id="replace-input" class="find-replace-input" type="text" />
+          </div>
+          <div class="find-replace-options">
+            <label><input id="find-regex" type="checkbox" /> Regex</label>
+            <label><input id="find-case" type="checkbox" /> Match case</label>
+            <label><input id="find-word" type="checkbox" /> Whole word</label>
+          </div>
+          <div id="find-replace-status" class="find-replace-status">Ready</div>
+          <div class="find-replace-actions">
+            <button data-action="find-next">Find Next</button>
+            <button data-action="replace-next">Replace Next</button>
+            <button data-action="replace-all">Replace All</button>
+            <button data-action="close-find-replace">Close</button>
+          </div>
+        </div>
+      </div>
+
+      <div id="link-check-modal" class="overlay-panel hidden no-drag" role="dialog" aria-modal="true" aria-label="Link Check Results">
+        <div class="overlay-backdrop" data-action="close-link-check"></div>
+        <div class="link-check-sheet">
+          <div class="link-check-header">Link Check Results</div>
+          <div id="link-check-summary" class="link-check-summary">No scan run yet.</div>
+          <div id="link-check-list" class="link-check-list"></div>
+          <div class="link-check-actions">
+            <button data-action="close-link-check">Close</button>
+          </div>
+        </div>
+      </div>
+
+      <div id="keybindings-modal" class="overlay-panel hidden no-drag" role="dialog" aria-modal="true" aria-label="Keyboard Shortcuts">
+        <div class="overlay-backdrop" data-action="close-keybindings"></div>
+        <div class="keybindings-sheet">
+          <div class="keybindings-header">Keyboard Shortcuts</div>
+          <div id="keybindings-list" class="keybindings-list"></div>
+          <div class="keybindings-actions">
+            <button data-action="save-keybindings">Save</button>
+            <button data-action="reset-keybindings">Reset Defaults</button>
+            <button data-action="close-keybindings">Close</button>
+          </div>
+        </div>
+      </div>
+
+      <div id="version-history-modal" class="overlay-panel hidden no-drag" role="dialog" aria-modal="true" aria-label="Version History">
+        <div class="overlay-backdrop" data-action="close-version-history"></div>
+        <div class="version-history-sheet">
+          <div class="version-history-header">Version History</div>
+          <div id="version-history-list" class="version-history-list"></div>
+          <div class="version-history-actions">
+            <button data-action="restore-selected-snapshot">Restore Selected</button>
+            <button data-action="close-version-history">Close</button>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <script src="./renderer.js"></script>
+  </body>
+</html>

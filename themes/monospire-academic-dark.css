@@ -1,0 +1,17 @@
+:root {
+  --bg: #1c1c1c;
+  --heading: #ffffff;
+  --text: #dddddd;
+  --muted: #bfbfbf;
+  --border: #3a3a3a;
+  --code-bg: #262626;
+}
+body { margin: 0; background: var(--bg); color: var(--text); font-family: Georgia, "Times New Roman", Times, serif; font-size: 17px; line-height: 1.75; text-align: justify; }
+h1,h2,h3,h4,h5,h6 { color: var(--heading); font-family: "Times New Roman", Times, serif; line-height: 1.3; margin-top: 1.5em; margin-bottom: 0.45em; }
+h1 { text-align: center; }
+blockquote { margin: 1em 1.2em; padding: 0.4em 0.9em; border-left: 3px solid #666666; color: var(--muted); }
+hr { border: 0; border-top: 1px solid var(--border); margin: 1.8em 0; }
+code,pre { font-family: "Courier New", Courier, monospace; font-size: 0.92em; }
+code { background: var(--code-bg); border: 1px solid var(--border); border-radius: 3px; padding: 0.05em 0.3em; }
+pre { background: var(--code-bg); border: 1px solid var(--border); border-radius: 4px; padding: 0.8em 0.9em; overflow-x: auto; }
+pre code { background: transparent; border: 0; padding: 0; }

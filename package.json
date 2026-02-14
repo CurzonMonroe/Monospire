@@ -1,0 +1,82 @@
+{
+  "name": "monospire",
+  "productName": "Monospire",
+  "version": "1.2.1",
+  "description": "Monospire: native-feeling macOS Markdown editor with ribbon and dual editing views.",
+  "main": "main.js",
+  "scripts": {
+    "start": "electron .",
+    "pack:app": "bash ./scripts/package-app.sh",
+    "pack:mac": "electron-builder --mac --dir",
+    "dist:mac": "electron-builder --mac",
+    "brew:cask": "bash ./scripts/generate-homebrew-cask.sh"
+  },
+  "keywords": [
+    "markdown",
+    "editor",
+    "electron",
+    "macos",
+    "monospire"
+  ],
+  "author": "",
+  "license": "MIT",
+  "devDependencies": {
+    "electron": "^35.0.0",
+    "electron-builder": "^26.7.0"
+  },
+  "build": {
+    "appId": "com.monospire.app",
+    "productName": "Monospire",
+    "buildVersion": "1.2.1.0",
+    "asar": false,
+    "files": [
+      "main.js",
+      "preload.js",
+      "mermaid-worker.html",
+      "mermaid-worker.js",
+      "renderer.js",
+      "index.html",
+      "styles.css",
+      "assets/**/*",
+      "themes/**/*",
+      "scripts/**/*",
+      "package.json",
+      "node_modules/**/*"
+    ],
+    "directories": {
+      "buildResources": "assets",
+      "output": "dist"
+    },
+    "mac": {
+      "category": "public.app-category.productivity",
+      "icon": "assets/Monospire.icns",
+      "target": [
+        "dir",
+        "dmg"
+      ]
+    },
+    "fileAssociations": [
+      {
+        "ext": "md",
+        "name": "Markdown Document",
+        "role": "Editor",
+        "icon": "assets/Monospire.icns"
+      },
+      {
+        "ext": "markdown",
+        "name": "Markdown Document",
+        "role": "Editor",
+        "icon": "assets/Monospire.icns"
+      }
+    ]
+  },
+  "dependencies": {
+    "@mermaid-js/mermaid-cli": "^11.12.0",
+    "highlight.js": "^11.11.1",
+    "html-to-docx": "^1.8.0",
+    "markdown-it": "^14.1.0",
+    "mermaid": "^10.9.5",
+    "morphdom": "^2.7.5",
+    "turndown": "^7.2.0"
+  }
+}
