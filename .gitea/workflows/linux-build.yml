@@ -31,6 +31,7 @@ jobs:
           fi
           $SUDO apt-get update
           $SUDO apt-get install -y --no-install-recommends \
+            binutils \
             fakeroot \
             rpm \
             xz-utils
