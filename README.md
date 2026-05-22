@@ -2,6 +2,90 @@
 
 Monospire is a macOS Markdown editor built with Electron. It provides raw and formatted editing views, bundled preview themes, syntax-highlighted code blocks, Mermaid rendering, document export, and native-feeling macOS menus.
 
+## Installation
+
+### macOS with Homebrew
+
+Install from the Monospire tap:
+
+```bash
+brew tap CurzonMonroe/monospire
+brew install --cask monospire
+```
+
+The cask installs `Monospire.app` and links the app executable as `monospire`, so the app can also be launched from the shell:
+
+```bash
+monospire
+monospire path/to/document.md
+```
+
+### macOS DMG
+
+Download the DMG from the GitHub release page, open it, and drag `Monospire.app` into `Applications`.
+
+Current ARM64 release:
+
+```text
+https://github.com/CurzonMonroe/Monospire/releases/download/v1.2.4/Monospire-1.2.4-arm64.dmg
+```
+
+### Linux
+
+Linux packages are published on the GitHub release page:
+
+```text
+https://github.com/CurzonMonroe/Monospire/releases/tag/v1.2.4
+```
+
+The current Linux packages are ARM64 builds. On an ARM64 Linux machine, install with the package format used by your distribution.
+
+Debian and Ubuntu:
+
+```bash
+wget https://github.com/CurzonMonroe/Monospire/releases/download/v1.2.4/monospire_1.2.4_arm64.deb
+sudo apt install ./monospire_1.2.4_arm64.deb
+```
+
+Fedora:
+
+```bash
+wget https://github.com/CurzonMonroe/Monospire/releases/download/v1.2.4/monospire-1.2.4.aarch64.rpm
+sudo dnf install ./monospire-1.2.4.aarch64.rpm
+```
+
+RHEL, CentOS, Rocky Linux, and AlmaLinux:
+
+```bash
+wget https://github.com/CurzonMonroe/Monospire/releases/download/v1.2.4/monospire-1.2.4.aarch64.rpm
+sudo dnf install ./monospire-1.2.4.aarch64.rpm
+```
+
+openSUSE:
+
+```bash
+wget https://github.com/CurzonMonroe/Monospire/releases/download/v1.2.4/monospire-1.2.4.aarch64.rpm
+sudo zypper install ./monospire-1.2.4.aarch64.rpm
+```
+
+AppImage, for distributions where a package install is not preferred:
+
+```bash
+wget https://github.com/CurzonMonroe/Monospire/releases/download/v1.2.4/Monospire-1.2.4-arm64.AppImage
+chmod +x Monospire-1.2.4-arm64.AppImage
+./Monospire-1.2.4-arm64.AppImage
+```
+
+Portable tarball:
+
+```bash
+wget https://github.com/CurzonMonroe/Monospire/releases/download/v1.2.4/monospire-1.2.4-arm64.tar.xz
+tar -xf monospire-1.2.4-arm64.tar.xz
+./monospire
+```
+
+Installing directly with `apt install monospire` requires a published APT repository. The `.deb` release asset is installable with `apt`, but it does not make Monospire available by package name until an APT repository is added.
+
 ## Development
 
 Install dependencies:
@@ -103,4 +187,5 @@ homebrew/Casks/Monospire.dmg/
 2. Run `npm run dist:mac`.
 3. Confirm `homebrew/Casks/monospire.rb` has the expected version, URL, and SHA256.
 4. Publish `dist/Monospire-<version>-arm64.dmg` to the matching GitHub release tag.
-5. Commit the source changes and updated Homebrew cask files.
+5. Confirm the Gitea Linux build has uploaded the `.AppImage`, `.deb`, `.rpm`, and `.tar.xz` assets to the matching GitHub release tag.
+6. Commit the source changes and updated Homebrew cask files.
