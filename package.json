@@ -9,6 +9,7 @@
     "pack:app": "bash ./scripts/package-app.sh",
     "pack:mac": "electron-builder --mac --dir",
     "dist:mac": "electron-builder --mac && npm run brew:cask",
+    "dist:linux": "electron-builder --linux AppImage deb rpm tar.xz",
     "brew:cask": "bash ./scripts/generate-homebrew-cask.sh"
   },
   "keywords": [
@@ -54,6 +55,25 @@
         "dir",
         "dmg"
       ]
+    },
+    "linux": {
+      "category": "Utility",
+      "executableName": "monospire",
+      "mimeTypes": [
+        "text/markdown",
+        "text/x-markdown"
+      ],
+      "target": [
+        "AppImage",
+        "deb",
+        "rpm",
+        "tar.xz"
+      ],
+      "desktop": {
+        "entry": {
+          "StartupWMClass": "Monospire"
+        }
+      }
     },
     "fileAssociations": [
       {

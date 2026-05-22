@@ -1,0 +1,67 @@
+name: Linux Build
+
+on:
+  push:
+    branches:
+      - main
+    tags:
+      - 'v*'
+  workflow_dispatch:
+
+jobs:
+  linux:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Check out source
+        uses: https://github.com/actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: https://github.com/actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: npm
+
+      - name: Install Linux packaging dependencies
+        run: |
+          if command -v sudo >/dev/null 2>&1; then
+            SUDO=sudo
+          else
+            SUDO=
+          fi
+          $SUDO apt-get update
+          $SUDO apt-get install -y --no-install-recommends \
+            fakeroot \
+            rpm \
+            xz-utils
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Validate JavaScript
+        run: |
+          node --check main.js
+          node --check renderer.js
+          node --check preload.js
+
+      - name: Build Linux packages
+        env:
+          CSC_IDENTITY_AUTO_DISCOVERY: 'false'
+        run: npm run dist:linux
+
+      - name: List artifacts
+        run: find dist -maxdepth 1 -type f -print -exec shasum -a 256 {} \;
+
+      - name: Upload Linux artifacts
+        uses: https://github.com/actions/upload-artifact@v4
+        with:
+          name: monospire-linux-${{ gitea.ref_name }}
+          path: |
+            dist/*.AppImage
+            dist/*.deb
+            dist/*.rpm
+            dist/*.tar.xz
+            dist/*.blockmap
+            dist/*.yml
+            dist/*.yaml
+          if-no-files-found: error
