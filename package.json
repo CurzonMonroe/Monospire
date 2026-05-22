@@ -9,7 +9,7 @@
     "pack:app": "bash ./scripts/package-app.sh",
     "pack:mac": "electron-builder --mac --dir",
     "dist:mac": "electron-builder --mac && npm run brew:cask",
-    "dist:linux": "electron-builder --linux AppImage deb rpm tar.xz",
+    "dist:linux": "electron-builder --linux AppImage deb rpm tar.xz --publish never",
     "brew:cask": "bash ./scripts/generate-homebrew-cask.sh"
   },
   "keywords": [
@@ -19,7 +19,10 @@
     "macos",
     "monospire"
   ],
-  "author": "",
+  "author": {
+    "name": "CurzonMonroe",
+    "email": "darren@houseofwray.com"
+  },
   "license": "MIT",
   "devDependencies": {
     "electron": "^35.0.0",
@@ -73,7 +76,8 @@
         "entry": {
           "StartupWMClass": "Monospire"
         }
-      }
+      },
+      "maintainer": "CurzonMonroe <darren@houseofwray.com>"
     },
     "fileAssociations": [
       {
@@ -98,5 +102,6 @@
     "mermaid": "^10.9.5",
     "morphdom": "^2.7.5",
     "turndown": "^7.2.0"
-  }
+  },
+  "homepage": "https://github.com/CurzonMonroe/Monospire"
 }
