@@ -4,7 +4,7 @@ try {
   // Ignore bootstrap logging failures.
 }
 
-const { app, BrowserWindow, Menu, dialog, ipcMain, nativeImage, shell, nativeTheme } = require('electron');
+const { app, BrowserWindow, Menu, dialog, ipcMain, nativeImage, shell, nativeTheme, screen } = require('electron');
 const path = require('path');
 const fs = require('fs/promises');
 const fsSync = require('fs');
@@ -22,6 +22,7 @@ let mermaidWorkerWindow = null;
 let mermaidWorkerReady = false;
 let mermaidWorkerLoadingPromise = null;
 const mermaidPendingRequests = new Map();
+const pendingOpenFilePaths = [];
 const BUNDLED_THEMES = [
   { label: 'GitHub Style', fileName: 'monospire-github.css' },
   { label: 'Minimal / Typographic', fileName: 'monospire-minimal.css' },
@@ -36,6 +37,14 @@ const BUNDLED_THEMES = [
   { label: 'Monospire Ink', fileName: 'monospire-ink.css' },
   { label: 'Monospire Roboto Courier', fileName: 'monospire-roboto-courier.css' }
 ];
+const DEFAULT_WINDOW_BOUNDS = {
+  width: 1260,
+  height: 860
+};
+const MIN_WINDOW_BOUNDS = {
+  width: 980,
+  height: 660
+};
 
 function getDiagnosticsPath() {
   if (diagnosticsPathCache) return diagnosticsPathCache;
@@ -201,6 +210,64 @@ async function writeSettings(nextSettings) {
   await fs.writeFile(settingsPath, payload, 'utf8');
 }
 
+function readSettingsSync() {
+  try {
+    const raw = fsSync.readFileSync(getSettingsPath(), 'utf8');
+    const parsed = JSON.parse(raw);
+    if (parsed && typeof parsed === 'object') return parsed;
+  } catch {
+    // Missing or invalid settings should fall back to defaults.
+  }
+  return {};
+}
+
+function normalizeWindowBounds(input) {
+  if (!input || typeof input !== 'object') return null;
+  const width = Math.round(Number(input.width));
+  const height = Math.round(Number(input.height));
+  if (!Number.isFinite(width) || !Number.isFinite(height)) return null;
+  if (width < MIN_WINDOW_BOUNDS.width || height < MIN_WINDOW_BOUNDS.height) return null;
+
+  const bounds = { width, height };
+  const x = Math.round(Number(input.x));
+  const y = Math.round(Number(input.y));
+  if (Number.isFinite(x) && Number.isFinite(y)) {
+    bounds.x = x;
+    bounds.y = y;
+  }
+  return bounds;
+}
+
+function resolveInitialWindowBounds() {
+  const settings = readSettingsSync();
+  const stored = normalizeWindowBounds(settings.windowBounds);
+  if (!stored) return { ...DEFAULT_WINDOW_BOUNDS };
+
+  const display = typeof stored.x === 'number' && typeof stored.y === 'number'
+    ? screen.getDisplayMatching(stored)
+    : screen.getPrimaryDisplay();
+  const workArea = display?.workArea;
+  if (!workArea || stored.width > workArea.width || stored.height > workArea.height) {
+    return { ...DEFAULT_WINDOW_BOUNDS };
+  }
+
+  if (typeof stored.x !== 'number' || typeof stored.y !== 'number') return stored;
+
+  return {
+    ...stored,
+    x: Math.min(Math.max(stored.x, workArea.x), workArea.x + workArea.width - stored.width),
+    y: Math.min(Math.max(stored.y, workArea.y), workArea.y + workArea.height - stored.height)
+  };
+}
+
+async function persistWindowBounds(bounds) {
+  const normalized = normalizeWindowBounds(bounds);
+  if (!normalized) return;
+  const settings = await readSettings();
+  settings.windowBounds = normalized;
+  await writeSettings(settings);
+}
+
 async function markMermaidPreviewCrashRecovery() {
   const settings = await readSettings();
   settings.mermaidPreviewEnabled = false;
@@ -296,6 +363,30 @@ function sendMenuAction(action, payload = {}) {
     return;
   }
   window.webContents.send('menu-action', { action, payload });
+}
+
+function isMarkdownFilePath(filePath) {
+  if (typeof filePath !== 'string' || !filePath.trim()) return false;
+  const extension = path.extname(filePath).toLowerCase();
+  return extension === '.md' || extension === '.markdown' || extension === '.txt';
+}
+
+function enqueueOpenFilePath(filePath) {
+  if (!isMarkdownFilePath(filePath)) return;
+  const resolved = path.resolve(filePath);
+  if (!fsSync.existsSync(resolved)) return;
+  if (pendingOpenFilePaths.includes(resolved)) return;
+  pendingOpenFilePaths.push(resolved);
+  logDiagnostics('open-file.queued', { path: resolved, pending: pendingOpenFilePaths.length });
+}
+
+function flushPendingOpenFilePaths() {
+  if (pendingOpenFilePaths.length === 0) return;
+  const queued = [...pendingOpenFilePaths];
+  pendingOpenFilePaths.length = 0;
+  for (const filePath of queued) {
+    createWindow(null, filePath);
+  }
 }
 
 function getBundledThemeFilePath(fileName) {
@@ -607,6 +698,13 @@ function buildAppMenu() {
           checked: true,
           click: (item) => sendMenuAction('set-sync-views', { enabled: item.checked })
         },
+        {
+          id: 'word-wrap',
+          label: 'Word Wrap',
+          type: 'checkbox',
+          checked: false,
+          click: (item) => sendMenuAction('set-word-wrap', { enabled: item.checked })
+        },
         { type: 'separator' },
         {
           id: 'toggle-outline',
@@ -902,19 +1000,14 @@ async function exportMarkdownPdf(filePath, payload) {
         color: #1f1f23;
         background: #ffffff;
       }
-      body.theme-dark {
-        color: #ecedf0;
-        background: #1b1e24;
-      }
       pre { background: #f3f3f7; border-radius: 8px; padding: 12px; overflow-x: auto; }
       code { font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace; }
-      body.theme-dark pre { background: #2b3039; }
       img, video, iframe { max-width: 100%; height: auto; }
       ${themeCss}
       ${presetCss}
     </style>
   </head>
-  <body class="${darkMode ? 'theme-dark' : ''}">${htmlContent}</body>
+  <body>${htmlContent}</body>
 </html>`;
 
   try {
@@ -954,19 +1047,14 @@ async function exportMarkdownHtml(filePath, payload) {
         color: #1f1f23;
         background: #ffffff;
       }
-      body.theme-dark {
-        color: #ecedf0;
-        background: #1b1e24;
-      }
       pre { background: #f3f3f7; border-radius: 8px; padding: 12px; overflow-x: auto; }
       code { font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace; }
-      body.theme-dark pre { background: #2b3039; }
       img, video, iframe { max-width: 100%; height: auto; }
       ${themeCss}
       ${presetCss}
     </style>
   </head>
-  <body class="${darkMode ? 'theme-dark' : ''}">${htmlContent}</body>
+  <body>${htmlContent}</body>
 </html>`;
   await fs.writeFile(filePath, fullHtml, 'utf8');
 }
@@ -993,7 +1081,6 @@ async function buildInlineStyledDocxHtml(payload) {
       }
       pre { background: #f3f3f7; border-radius: 8px; padding: 12px; overflow-x: auto; }
       code { font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace; }
-      ${darkMode ? 'body { color: #ecedf0; background: #1b1e24; } pre { background: #2b3039; }' : ''}
       ${themeCss}
       ${presetCss}
     </style>
@@ -1101,14 +1188,10 @@ function getExportPresetCss(format, preset, darkMode) {
       body { font-family: Georgia, "Times New Roman", serif; font-size: 13px; line-height: 1.75; }
       h1, h2, h3, h4 { font-family: "Times New Roman", Georgia, serif; }
     `,
-    dark: darkMode
-      ? `
-        body { background: #101216 !important; color: #edf0f6 !important; }
-        pre { background: #1e2430 !important; border: 1px solid #31394a; }
-      `
-      : `
-        body { background: #ffffff !important; color: #1f1f23 !important; }
-      `
+    dark: `
+      body { background: #ffffff !important; color: #1f1f23 !important; }
+      pre { background: #f6f8fa !important; border: 1px solid #d0d7de; }
+    `
   };
 
   const docxPresets = {
@@ -1201,16 +1284,17 @@ ipcMain.handle('file-export-pages', async (_event, payload) => {
   }
 });
 
-function createWindow(initialSessionState = null) {
+function createWindow(initialSessionState = null, initialOpenPath = null) {
   logDiagnostics('window.create.start', {
-    hasInitialSessionState: Boolean(initialSessionState)
+    hasInitialSessionState: Boolean(initialSessionState),
+    initialOpenPath: initialOpenPath || null
   });
   const iconPath = resolveAppIconPath();
+  const initialBounds = resolveInitialWindowBounds();
   const window = new BrowserWindow({
-    width: 1260,
-    height: 860,
-    minWidth: 980,
-    minHeight: 660,
+    ...initialBounds,
+    minWidth: MIN_WINDOW_BOUNDS.width,
+    minHeight: MIN_WINDOW_BOUNDS.height,
     title: 'Monospire',
     titleBarStyle: 'hiddenInset',
     backgroundColor: '#f3f3f7',
@@ -1224,6 +1308,29 @@ function createWindow(initialSessionState = null) {
   });
   window.__isMermaidWorker = false;
 
+  let saveBoundsTimer = null;
+  const saveCurrentWindowBounds = (options = {}) => {
+    if (window.isDestroyed() || window.isMinimized() || window.isFullScreen()) return;
+    const bounds = window.getNormalBounds();
+    if (saveBoundsTimer) clearTimeout(saveBoundsTimer);
+    if (options.immediate === true) {
+      saveBoundsTimer = null;
+      void persistWindowBounds(bounds).catch((error) => {
+        logDiagnostics('window.bounds.persist.error', { error: String(error?.message || error || 'unknown') });
+      });
+      return;
+    }
+    saveBoundsTimer = setTimeout(() => {
+      saveBoundsTimer = null;
+      void persistWindowBounds(bounds).catch((error) => {
+        logDiagnostics('window.bounds.persist.error', { error: String(error?.message || error || 'unknown') });
+      });
+    }, 250);
+  };
+
+  window.on('resize', saveCurrentWindowBounds);
+  window.on('move', saveCurrentWindowBounds);
+
   window.loadFile('index.html');
   logDiagnostics('window.loadFile.called', { file: 'index.html' });
   applyDockIcon();
@@ -1232,8 +1339,14 @@ function createWindow(initialSessionState = null) {
   logDiagnostics('window.created', { webContentsId });
   window.webContents.once('did-finish-load', () => {
     logDiagnostics('window.did-finish-load', { webContentsId });
-    if (!initialSessionState) return;
-    window.webContents.send('menu-action', { action: 'restore-session', payload: { state: initialSessionState } });
+    if (initialSessionState) {
+      window.webContents.send('menu-action', { action: 'restore-session', payload: { state: initialSessionState } });
+    }
+    if (initialOpenPath) {
+      window.webContents.send('menu-action', { action: 'file-open-path', payload: { path: initialOpenPath } });
+    } else {
+      flushPendingOpenFilePaths();
+    }
   });
   window.webContents.on('did-fail-load', (_event, errorCode, errorDescription, validatedURL, isMainFrame) => {
     logDiagnostics('window.did-fail-load', {
@@ -1319,6 +1432,7 @@ function createWindow(initialSessionState = null) {
 
   window.on('close', (event) => {
     logDiagnostics('window.close.requested', { webContentsId, allowClose: Boolean(window.__allowClose) });
+    saveCurrentWindowBounds({ immediate: true });
     if (window.__allowClose) {
       window.__allowClose = false;
       return;
@@ -1344,6 +1458,10 @@ function createWindow(initialSessionState = null) {
   });
 
   window.on('closed', () => {
+    if (saveBoundsTimer) {
+      clearTimeout(saveBoundsTimer);
+      saveBoundsTimer = null;
+    }
     logDiagnostics('window.closed', { webContentsId });
     if (!isQuittingForSessionPersist) {
       windowSessionState.delete(webContentsId);
@@ -1683,6 +1801,21 @@ ipcMain.handle('load-sync-views-preference', async () => {
     return { loaded: false, enabled: true };
   }
   return { loaded: true, enabled: settings.syncViews };
+});
+
+ipcMain.handle('save-word-wrap-preference', async (_event, payload) => {
+  const settings = await readSettings();
+  settings.wordWrap = payload?.enabled === true;
+  await writeSettings(settings);
+  return { saved: true };
+});
+
+ipcMain.handle('load-word-wrap-preference', async () => {
+  const settings = await readSettings();
+  if (typeof settings.wordWrap !== 'boolean') {
+    return { loaded: false, enabled: false };
+  }
+  return { loaded: true, enabled: settings.wordWrap };
 });
 
 ipcMain.handle('save-mermaid-preview-preference', async (_event, payload) => {
@@ -2185,8 +2318,7 @@ ipcMain.on('file-save-as-sync', (event, payload) => {
     if (extension === '.html' || extension === '.htm') {
       const htmlContent = payload?.renderedHtml || '';
       const themeCss = payload?.themeCssText || '';
-      const darkMode = Boolean(payload?.darkMode);
-      const presetCss = getExportPresetCss('html', payload?.exportPresets?.html, darkMode);
+      const presetCss = getExportPresetCss('html', payload?.exportPresets?.html, false);
       const fullHtml = `<!doctype html>
 <html>
   <head>
@@ -2195,7 +2327,7 @@ ipcMain.on('file-save-as-sync', (event, payload) => {
     <title>Monospire Export</title>
     <style>${themeCss}\n${presetCss}</style>
   </head>
-  <body class="${darkMode ? 'theme-dark' : ''}">${htmlContent}</body>
+  <body>${htmlContent}</body>
 </html>`;
       fsSync.writeFileSync(filePath, fullHtml, 'utf8');
     } else {
@@ -2248,6 +2380,7 @@ ipcMain.on('update-menu-state', (event, payload) => {
   const embeddedMenuItem = menu.getMenuItemById('display-menu-in-app');
   const themeDebugItem = menu.getMenuItemById('display-theme-debug');
   const syncViewsItem = menu.getMenuItemById('sync-views');
+  const wordWrapItem = menu.getMenuItemById('word-wrap');
   const mermaidPreviewItem = menu.getMenuItemById('mermaid-preview-experimental');
   const outlineItem = menu.getMenuItemById('toggle-outline');
   const outlineLeftItem = menu.getMenuItemById('outline-left');
@@ -2285,6 +2418,7 @@ ipcMain.on('update-menu-state', (event, payload) => {
   if (embeddedMenuItem && typeof payload.embeddedMenu === 'boolean') embeddedMenuItem.checked = payload.embeddedMenu;
   if (themeDebugItem && typeof payload.themeDebugVisible === 'boolean') themeDebugItem.checked = payload.themeDebugVisible;
   if (syncViewsItem && typeof payload.syncViewsEnabled === 'boolean') syncViewsItem.checked = payload.syncViewsEnabled;
+  if (wordWrapItem && typeof payload.wordWrapEnabled === 'boolean') wordWrapItem.checked = payload.wordWrapEnabled;
   if (mermaidPreviewItem && typeof payload.mermaidPreviewEnabled === 'boolean') mermaidPreviewItem.checked = payload.mermaidPreviewEnabled;
   if (outlineItem && typeof payload.outlineVisible === 'boolean') outlineItem.checked = payload.outlineVisible;
   if (outlineLeftItem && typeof payload.outlineVisible === 'boolean') outlineLeftItem.enabled = payload.outlineVisible;
@@ -2433,6 +2567,19 @@ ipcMain.handle('clear-recent-files', async () => {
   return saved;
 });
 
+app.on('open-file', (event, filePath) => {
+  event.preventDefault();
+  enqueueOpenFilePath(filePath);
+  if (app.isReady()) {
+    flushPendingOpenFilePaths();
+  }
+});
+
+for (const arg of process.argv.slice(1)) {
+  if (!arg || arg.startsWith('-')) continue;
+  enqueueOpenFilePath(arg);
+}
+
 app.whenReady().then(() => {
   logDiagnostics('app.whenReady');
   applyDockIcon();
@@ -2447,14 +2594,25 @@ app.whenReady().then(() => {
       for (const state of restored) {
         createWindow(state);
       }
+      flushPendingOpenFilePaths();
+    } else if (pendingOpenFilePaths.length > 0) {
+      flushPendingOpenFilePaths();
     } else {
       createWindow();
-    }
+    }    
 
     app.on('activate', () => {
       logDiagnostics('app.activate');
       applyDockIcon();
-      if (getDocumentWindows().length === 0) createWindow();
+      if (getDocumentWindows().length === 0) {
+        if (pendingOpenFilePaths.length > 0) {
+          flushPendingOpenFilePaths();
+        } else {
+          createWindow();
+        }
+      } else {
+        flushPendingOpenFilePaths();
+      }
     });
 
     const initialSystemDark = nativeTheme.shouldUseDarkColors;

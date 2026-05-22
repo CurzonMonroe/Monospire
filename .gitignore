@@ -6,6 +6,7 @@ dist/
 out/
 release/
 build/
+homebrew/Casks/Monospire.dmg/
 
 # Logs
 *.log

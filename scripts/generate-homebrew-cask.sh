@@ -9,23 +9,23 @@ usage() {
 Generate a Homebrew cask file for Monospire.
 
 Usage:
-  scripts/generate-homebrew-cask.sh --dmg /path/to/Monospire.dmg --url https://.../Monospire.dmg [--version 1.2.1] [--homepage https://...]
+  scripts/generate-homebrew-cask.sh [--dmg /path/to/Monospire.dmg] [--url https://.../Monospire.dmg] [--version 1.2.2] [--homepage https://...]
 
-Required:
-  --dmg       Local DMG path used to compute SHA256.
-  --url       Public release URL to that DMG.
-
-Optional:
-  --version   App version (defaults to package.json version).
-  --homepage  Project homepage URL (defaults to placeholder).
-  --output    Output cask path (defaults to homebrew/Casks/monospire.rb).
+Defaults:
+  --version      App version from package.json.
+  --dmg          dist/Monospire-<version>-arm64.dmg.
+  --url          GitHub release URL for v<version>.
+  --homepage     https://github.com/CurzonMonroe/Monospire.
+  --output       homebrew/Casks/monospire.rb.
+  --release-dir  homebrew/Casks/Monospire.dmg.
 USAGE
 }
 
 DMG_PATH=""
 DMG_URL=""
 APP_VERSION=""
-HOMEPAGE_URL="https://github.com/your-org/monospire"
+HOMEPAGE_URL="https://github.com/CurzonMonroe/Monospire"
+RELEASE_DIR="${ROOT_DIR}/homebrew/Casks/Monospire.dmg"
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -49,6 +49,10 @@ while [[ $# -gt 0 ]]; do
       OUT_FILE="${2:-}"
       shift 2
       ;;
+    --release-dir)
+      RELEASE_DIR="${2:-}"
+      shift 2
+      ;;
     -h|--help)
       usage
       exit 0
@@ -61,9 +65,16 @@ while [[ $# -gt 0 ]]; do
   esac
 done
 
-if [[ -z "${DMG_PATH}" || -z "${DMG_URL}" ]]; then
-  usage
-  exit 1
+if [[ -z "${APP_VERSION}" ]]; then
+  APP_VERSION="$(node -p "require('${ROOT_DIR}/package.json').version")"
+fi
+
+if [[ -z "${DMG_PATH}" ]]; then
+  DMG_PATH="${ROOT_DIR}/dist/Monospire-${APP_VERSION}-arm64.dmg"
+fi
+
+if [[ -z "${DMG_URL}" ]]; then
+  DMG_URL="https://github.com/CurzonMonroe/Monospire/releases/download/v${APP_VERSION}/Monospire-${APP_VERSION}-arm64.dmg"
 fi
 
 if [[ ! -f "${DMG_PATH}" ]]; then
@@ -71,12 +82,9 @@ if [[ ! -f "${DMG_PATH}" ]]; then
   exit 1
 fi
 
-if [[ -z "${APP_VERSION}" ]]; then
-  APP_VERSION="$(node -p "require('${ROOT_DIR}/package.json').version")"
-fi
-
 SHA256="$(shasum -a 256 "${DMG_PATH}" | awk '{print $1}')"
 mkdir -p "$(dirname "${OUT_FILE}")"
+mkdir -p "${RELEASE_DIR}"
 
 cat > "${OUT_FILE}" <<EOF
 cask "monospire" do
@@ -101,7 +109,28 @@ cask "monospire" do
 end
 EOF
 
+find "${RELEASE_DIR}" -maxdepth 1 -type f \( \
+  -name 'Monospire-*.dmg' -o \
+  -name 'Monospire-*.dmg.blockmap' -o \
+  -name 'latest-mac.yml' -o \
+  -name 'builder-effective-config.yaml' -o \
+  -name 'builder-debug.yml' \
+\) -delete
+find "${RELEASE_DIR}" -maxdepth 1 -type d -name 'mac-*' -exec rm -rf {} +
+
+cp "${DMG_PATH}" "${RELEASE_DIR}/"
+for artifact in \
+  "${DMG_PATH}.blockmap" \
+  "${ROOT_DIR}/dist/latest-mac.yml" \
+  "${ROOT_DIR}/dist/builder-effective-config.yaml" \
+  "${ROOT_DIR}/dist/builder-debug.yml"
+do
+  if [[ -f "${artifact}" ]]; then
+    cp "${artifact}" "${RELEASE_DIR}/"
+  fi
+done
+
 echo "Wrote ${OUT_FILE}"
+echo "Copied release artifacts to ${RELEASE_DIR}"
 echo "version=${APP_VERSION}"
 echo "sha256=${SHA256}"
-

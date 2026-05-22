@@ -158,15 +158,16 @@ async function loadMermaidApi() {
   return null;
 }
 
-async function renderMermaidWithFallback(source, preferredBackend) {
+async function renderMermaidWithFallback(source, preferredBackend, options = {}) {
   const attempts = preferredBackend === 'cli' ? ['cli', 'worker'] : ['worker', 'cli'];
   let lastResult = null;
+  const renderDarkMode = options.darkMode ?? darkMode;
 
   for (const backend of attempts) {
     try {
       if (backend === 'worker' && typeof window.nativeApi?.renderMermaid === 'function') {
         const result = await withTimeout(
-          window.nativeApi.renderMermaid({ code: source, darkMode }),
+          window.nativeApi.renderMermaid({ code: source, darkMode: renderDarkMode }),
           MERMAID_RENDER_TIMEOUT_MS,
           `mermaid render timed out after ${MERMAID_RENDER_TIMEOUT_MS}ms`
         );
@@ -271,7 +272,8 @@ function initializeSyntaxHighlighter() {
 }
 
 function applyInlineHljsStyles(highlightedHtml) {
-  const palette = darkMode
+  const useDarkPalette = darkMode && !renderingForExport;
+  const palette = useDarkPalette
     ? {
         keyword: 'color:#c792ea;font-weight:600;',
         string: 'color:#8bd49c;',
@@ -318,6 +320,26 @@ function applyInlineHljsStyles(highlightedHtml) {
   });
 }
 
+function codeBlockLabelStyle() {
+  const color = darkMode && !renderingForExport ? '#8fb8ff' : '#2f6f9f';
+  return [
+    'display:block!important',
+    'text-align:right!important',
+    'font-family:-apple-system,BlinkMacSystemFont,Helvetica,Arial,sans-serif!important',
+    'font-size:0.72em!important',
+    'line-height:1.15!important',
+    'font-weight:700!important',
+    'letter-spacing:0.02em!important',
+    'text-transform:uppercase!important',
+    `color:${color}!important`,
+    'margin:0 0 0.14em 0!important',
+    'padding:0!important',
+    'background:transparent!important',
+    'border:0!important',
+    'pointer-events:none!important'
+  ].join(';');
+}
+
 function renderFenceWithHighlightJs(content, info, langLabel, classSafeLang) {
   if (!syntaxReady || !hljs) return null;
 
@@ -328,7 +350,7 @@ function renderFenceWithHighlightJs(content, info, langLabel, classSafeLang) {
       : hljs.highlightAuto(content).value;
     const highlighted = applyInlineHljsStyles(highlightedRaw);
 
-    return `<pre class="code-block hljs language-${classSafeLang}" data-lang="${langLabel}"><span class="code-block-label">${langLabel}</span>\n<code class="hljs language-${classSafeLang}">${highlighted}</code></pre>\n`;
+    return `<pre class="code-block hljs language-${classSafeLang}" data-lang="${langLabel}"><span class="code-block-label" style="${codeBlockLabelStyle()}">${langLabel}</span>\n<code class="hljs language-${classSafeLang}">${highlighted}</code></pre>\n`;
   } catch {
     return null;
   }
@@ -400,7 +422,7 @@ md.renderer.rules.fence = (tokens, idx, options, env, self) => {
   }
   const codeContent = highlightCodeContent(token.content, info);
 
-  return `<pre class="code-block" data-lang="${langLabel}"${lineAttr}><span class="code-block-label">${langLabel}</span>\n<code class="language-${classSafeLang}">${codeContent}</code></pre>\n`;
+  return `<pre class="code-block" data-lang="${langLabel}"${lineAttr}><span class="code-block-label" style="${codeBlockLabelStyle()}">${langLabel}</span>\n<code class="language-${classSafeLang}">${codeContent}</code></pre>\n`;
 };
 
 md.inline.ruler.before('emphasis', 'mark', (state, silent) => {
@@ -556,6 +578,7 @@ let themeLightPath = null;
 let themeLightCssText = '';
 let themeDarkPath = null;
 let themeDarkCssText = '';
+let renderingForExport = false;
 let defaultTemplatePath = null;
 let currentFilePath = null;
 let currentFileName = 'Untitled.md';
@@ -577,6 +600,7 @@ let darkModeSyncSystem = false;
 let embeddedMenu = false;
 let themeDebugVisible = false;
 let syncViewsEnabled = true;
+let wordWrapEnabled = false;
 let mermaidPreviewEnabled = false;
 let outlineVisible = true;
 let outlinePosition = 'right';
@@ -592,6 +616,9 @@ let formattedNormalizeTimer = null;
 let lastFindQuery = '';
 let rawFindCursor = 0;
 let previewScrollSyncRaf = null;
+let rawScrollSyncRaf = null;
+let activeScrollSyncSource = null;
+let previewAnchorCache = null;
 let recentFiles = [];
 let outlineItems = [];
 let paletteItems = [];
@@ -1183,6 +1210,7 @@ function setOutlineVisible(enabled, options = {}) {
   const persist = options.persist !== false;
   outlineVisible = enabled !== false;
   workspace.classList.toggle('with-outline', outlineVisible);
+  invalidatePreviewAnchorCache();
   if (persist) {
     void window.nativeApi.saveOutlinePreference({
       visible: outlineVisible,
@@ -1199,6 +1227,7 @@ function setOutlinePosition(position, options = {}) {
   outlinePosition = position;
   workspace.classList.remove('outline-left', 'outline-right');
   workspace.classList.add(outlinePosition === 'left' ? 'outline-left' : 'outline-right');
+  invalidatePreviewAnchorCache();
   if (persist) {
     void window.nativeApi.saveOutlinePreference({
       visible: outlineVisible,
@@ -1253,6 +1282,7 @@ function commandPaletteCommands() {
     { label: 'View: Outline Left', action: 'outline-left' },
     { label: 'View: Outline Right', action: 'outline-right' },
     { label: 'View: Syncronise Views', action: 'toggle-sync-views' },
+    { label: 'View: Toggle Word Wrap', action: 'toggle-word-wrap' },
     { label: 'Tools: Edit Front Matter', action: 'edit-front-matter' },
     { label: 'Tools: Load Theme', action: 'load-theme' },
     { label: 'Tools: Toggle Dark Mode', action: 'toggle-dark-mode' }
@@ -1368,6 +1398,7 @@ function updateMenuChecks() {
   const darkModeToggle = document.querySelector('[data-toggle="dark-mode"]');
   const darkModeSyncToggle = document.querySelector('[data-toggle="dark-mode-sync"]');
   const syncViewsToggle = document.querySelector('[data-toggle="sync-views"]');
+  const wordWrapToggle = document.querySelector('[data-toggle="word-wrap"]');
   const mermaidPreviewToggle = document.querySelector('[data-toggle="mermaid-preview"]');
   const outlineToggle = document.querySelector('[data-toggle="outline-view"]');
   const outlineLeftToggle = document.querySelector('[data-toggle="outline-left"]');
@@ -1398,6 +1429,7 @@ function updateMenuChecks() {
   if (darkModeSyncToggle) darkModeSyncToggle.classList.toggle('checked', darkModeSyncSystem);
   if (darkModeToggle) darkModeToggle.disabled = darkModeSyncSystem;
   if (syncViewsToggle) syncViewsToggle.classList.toggle('checked', syncViewsEnabled);
+  if (wordWrapToggle) wordWrapToggle.classList.toggle('checked', wordWrapEnabled);
   if (mermaidPreviewToggle) mermaidPreviewToggle.classList.toggle('checked', mermaidPreviewEnabled);
   if (outlineToggle) outlineToggle.classList.toggle('checked', outlineVisible);
   if (outlineLeftToggle) outlineLeftToggle.classList.toggle('checked', outlinePosition === 'left');
@@ -1439,6 +1471,7 @@ function notifyNativeMenuState() {
     embeddedMenu,
     themeDebugVisible,
     syncViewsEnabled,
+    wordWrapEnabled,
     mermaidPreviewEnabled,
     outlineVisible,
     outlinePosition,
@@ -1453,6 +1486,7 @@ function notifyNativeMenuState() {
 function applySplitOrientation() {
   workspace.classList.remove('split-horizontal', 'split-vertical');
   workspace.classList.add(splitOrientation === 'vertical' ? 'split-vertical' : 'split-horizontal');
+  invalidatePreviewAnchorCache();
 }
 
 function updateListModeButtons() {
@@ -1492,6 +1526,7 @@ function setViewVisibility(nextRaw, nextFormatted) {
   showRaw = nextRaw;
   showFormatted = nextFormatted;
   setModeFromVisibility();
+  invalidatePreviewAnchorCache();
   publishSessionState();
 }
 
@@ -1553,9 +1588,11 @@ function applyFormattedZoom() {
   if (!doc) return;
   if (userCssText && userCssText.trim().length > 0) {
     doc.body.style.fontSize = '';
+    invalidatePreviewAnchorCache();
     return;
   }
   doc.body.style.fontSize = `${15 * formattedZoom}px`;
+  invalidatePreviewAnchorCache();
 }
 
 function setRibbonMode(nextMode, options = {}) {
@@ -1669,6 +1706,12 @@ async function loadSyncViewsPreference() {
   return result.enabled !== false;
 }
 
+async function loadWordWrapPreference() {
+  const result = await window.nativeApi.loadWordWrapPreference();
+  if (!result?.loaded) return false;
+  return result.enabled === true;
+}
+
 async function loadMermaidPreviewPreference() {
   const result = await window.nativeApi.loadMermaidPreviewPreference();
   if (!result?.loaded) return false;
@@ -1717,6 +1760,17 @@ function setSyncViewsEnabled(enabled, options = {}) {
   notifyNativeMenuState();
 }
 
+function setWordWrapEnabled(enabled, options = {}) {
+  const persist = options.persist !== false;
+  wordWrapEnabled = enabled === true;
+  rawEditor.wrap = wordWrapEnabled ? 'soft' : 'off';
+  if (persist) {
+    void window.nativeApi.saveWordWrapPreference({ enabled: wordWrapEnabled });
+  }
+  updateMenuChecks();
+  notifyNativeMenuState();
+}
+
 function setMermaidPreviewEnabled(enabled, options = {}) {
   const persist = options.persist !== false;
   mermaidPreviewEnabled = enabled === true;
@@ -1752,6 +1806,7 @@ function applyFrameTheme() {
   const doc = frame.contentDocument;
   if (!doc) return;
   doc.body.classList.toggle('theme-dark', darkMode);
+  invalidatePreviewAnchorCache();
 }
 
 function ensureFrameDocument() {
@@ -1854,6 +1909,72 @@ function normalizeThemeCss(cssText) {
   const withoutImports = upgraded.replace(importPattern, '').trim();
   if (importMatches.length === 0) return upgraded;
   return `${importMatches.join('\n')}\n${withoutImports}`;
+}
+
+function buildExportThemeCss() {
+  const lightThemeCss = themeLightCssText && themeLightCssText.trim().length > 0 ? themeLightCssText : '';
+  const baseThemeCss = lightThemeCss || userCssText || '';
+
+  const needsReadableTextOverride = !lightThemeCss;
+  const textOverrides = needsReadableTextOverride
+    ? `
+      --text: #1f1f23;
+      --heading: #111827;
+      --muted: #59636e;
+      --border: #d0d7de;
+      --rule: #d0d7de;
+      --link: #0969da;
+      --accent: #0969da;
+      --code-text: #24292f;
+      --code-border: #d0d7de;
+    `
+    : '';
+
+  const exportOverrides = `
+    :root {
+      --bg: #ffffff;
+      --panel: #f6f8fa;
+      --quote-bg: #f6f8fa;
+      --table-head: #f6f8fa;
+      --table-row: #ffffff;
+      --code-bg: #f6f8fa;
+      --code-inline-bg: #f6f8fa;
+      --code-block-bg: #f6f8fa;
+      ${textOverrides}
+    }
+
+    html,
+    body {
+      background: #ffffff !important;
+    }
+
+    ${needsReadableTextOverride ? `
+    body { color: var(--text) !important; }
+    h1, h2, h3, h4, h5, h6 { color: var(--heading) !important; }
+    blockquote { color: var(--muted) !important; background: var(--quote-bg) !important; border-color: var(--border) !important; }
+    a, a:visited { color: var(--link) !important; }
+    hr { border-color: var(--border) !important; }
+    th { background: var(--table-head) !important; }
+    td, th { border-color: var(--border) !important; }
+    ` : ''}
+    code { background: var(--code-bg) !important; }
+    pre {
+      background: var(--code-block-bg, var(--code-bg)) !important;
+      max-width: 100% !important;
+      overflow-x: visible !important;
+      white-space: pre-wrap !important;
+      overflow-wrap: anywhere !important;
+      word-break: break-word !important;
+    }
+    pre code {
+      background: transparent !important;
+      white-space: pre-wrap !important;
+      overflow-wrap: anywhere !important;
+      word-break: break-word !important;
+    }
+  `;
+
+  return normalizeThemeCss(`${baseThemeCss}\n${exportOverrides}`);
 }
 
 function updateThemeDebug() {
@@ -1969,6 +2090,7 @@ async function updateFrameCss() {
     if (doc.adoptedStyleSheets && doc.__monospireBaseSheets) doc.adoptedStyleSheets = [...doc.__monospireBaseSheets];
     doc.body.classList.add('use-default-theme');
   }
+  invalidatePreviewAnchorCache();
   updateThemeDebug();
 }
 
@@ -2046,6 +2168,7 @@ function patchFrameHtml(html) {
       return true;
     }
   });
+  invalidatePreviewAnchorCache();
   updateThemeDebug();
 }
 
@@ -2068,6 +2191,7 @@ async function renderMermaidBlocksInDocument(doc, options = {}) {
       block.classList.remove('mermaid-ready', 'mermaid-error');
     }
     diagnosticLog('mermaid.render.skip', { reason: 'preview-disabled', export: false });
+    invalidatePreviewAnchorCache();
     return;
   }
   if (blocks.length === 0) {
@@ -2093,7 +2217,9 @@ async function renderMermaidBlocksInDocument(doc, options = {}) {
 
     try {
       diagnosticLog('mermaid.block.render.start', { blockIndex: index, export: Boolean(options.forExport) });
-      const rendered = await renderMermaidWithFallback(source, api.backend);
+      const rendered = await renderMermaidWithFallback(source, api.backend, {
+        darkMode: options.forExport ? false : darkMode
+      });
       if (rendered?.ok && typeof rendered.svg === 'string') {
         renderTarget.innerHTML = rendered.svg;
         block.classList.add('mermaid-ready');
@@ -2130,6 +2256,7 @@ async function renderMermaidBlocksInDocument(doc, options = {}) {
     }
   }
   diagnosticLog('mermaid.render.done', { blocks: blocks.length, export: Boolean(options.forExport) });
+  if (!options.forExport) invalidatePreviewAnchorCache();
 }
 
 function scheduleFrameMermaidRender() {
@@ -2154,7 +2281,13 @@ function scheduleFrameMermaidRender() {
 
 async function renderMarkdownForExport(markdown) {
   const split = splitFrontMatter(markdown);
-  const html = md.render(split.body, { bodyLineOffset: split.bodyLineOffset || 0 });
+  let html = '';
+  renderingForExport = true;
+  try {
+    html = md.render(split.body, { bodyLineOffset: split.bodyLineOffset || 0 });
+  } finally {
+    renderingForExport = false;
+  }
   if (!MERMAID_ENABLED) return html;
   if (!html.includes('data-mermaid-block')) return html;
   const exportDoc = document.implementation.createHTMLDocument('export');
@@ -2204,19 +2337,169 @@ function renderFromMarkdown(source) {
   updateStatusBar();
 }
 
+function invalidatePreviewAnchorCache() {
+  previewAnchorCache = null;
+}
+
+function getPreviewLineAnchors() {
+  const doc = frame.contentDocument;
+  if (!doc) return null;
+  const scrollEl = doc.scrollingElement || doc.documentElement || doc.body;
+  if (!scrollEl) return null;
+
+  if (
+    previewAnchorCache
+    && previewAnchorCache.doc === doc
+    && previewAnchorCache.scrollHeight === scrollEl.scrollHeight
+    && previewAnchorCache.clientHeight === scrollEl.clientHeight
+  ) {
+    return previewAnchorCache;
+  }
+
+  const anchors = [...doc.querySelectorAll('[data-line]')]
+    .map((node) => ({
+      line: Number(node.getAttribute('data-line') || 0),
+      top: node.getBoundingClientRect().top + scrollEl.scrollTop
+    }))
+    .filter((item) => Number.isFinite(item.line))
+    .sort((a, b) => a.line - b.line);
+
+  previewAnchorCache = {
+    doc,
+    scrollHeight: scrollEl.scrollHeight,
+    clientHeight: scrollEl.clientHeight,
+    anchors
+  };
+  return previewAnchorCache;
+}
+
+function shouldUseRatioScrollSync(anchors) {
+  if (wordWrapEnabled) return true;
+  if (!Array.isArray(anchors) || anchors.length < 2) return true;
+  const uniqueLines = new Set(anchors.map((anchor) => anchor.line)).size;
+  return uniqueLines < (anchors.length * 0.65);
+}
+
 function syncPreviewScrollWithRaw() {
   if (!syncViewsEnabled) return;
   if (!showRaw || !showFormatted) return;
   if (!frame.contentDocument || !frame.contentWindow) return;
 
+  const doc = frame.contentDocument;
+  const scrollEl = doc.scrollingElement || doc.documentElement || doc.body;
+  const anchorCache = getPreviewLineAnchors();
+  const anchors = anchorCache?.anchors || [];
+
+  let nextPreviewTop = null;
   const rawMax = Math.max(1, rawEditor.scrollHeight - rawEditor.clientHeight);
   const rawRatio = rawEditor.scrollTop / rawMax;
+  const useRatioSync = shouldUseRatioScrollSync(anchors);
+
+  if (useRatioSync) {
+    const previewMax = Math.max(0, scrollEl.scrollHeight - scrollEl.clientHeight);
+    nextPreviewTop = Math.round(previewMax * rawRatio);
+  } else {
+    const computedRaw = window.getComputedStyle(rawEditor);
+    const rawLineHeight = Number.parseFloat(computedRaw.lineHeight);
+    const usableLineHeight = Number.isFinite(rawLineHeight) && rawLineHeight > 0 ? rawLineHeight : 20;
+
+    if (anchors.length > 0) {
+      const rawVisibleLine = Math.max(0, Math.floor(rawEditor.scrollTop / usableLineHeight));
+      let anchorIndex = 0;
+      for (let i = 0; i < anchors.length; i += 1) {
+        if (anchors[i].line <= rawVisibleLine) anchorIndex = i;
+        else break;
+      }
+      const active = anchors[anchorIndex];
+      const next = anchors[Math.min(anchorIndex + 1, anchors.length - 1)];
+      const startLine = active.line;
+      const endLine = Math.max(startLine + 1, next.line || (startLine + 1));
+      const lineProgress = Math.max(0, Math.min(1, (rawVisibleLine - startLine) / (endLine - startLine)));
+
+      const activeTop = active.top;
+      const nextTop = next
+        ? next.top
+        : Math.max(activeTop + 1, scrollEl.scrollHeight - scrollEl.clientHeight);
+      const blockHeight = Math.max(1, nextTop - activeTop);
+      const intraLinePx = rawEditor.scrollTop - (rawVisibleLine * usableLineHeight);
+      const intraLineRatio = Math.max(0, Math.min(1, intraLinePx / usableLineHeight));
+      const combinedProgress = Math.max(0, Math.min(1, lineProgress + ((1 / Math.max(1, endLine - startLine)) * intraLineRatio)));
+      nextPreviewTop = Math.round(activeTop + (blockHeight * combinedProgress));
+    }
+  }
+
+  if (nextPreviewTop === null) {
+    const previewMax = Math.max(0, scrollEl.scrollHeight - scrollEl.clientHeight);
+    nextPreviewTop = Math.round(previewMax * rawRatio);
+  }
+  activeScrollSyncSource = 'raw';
+  frame.contentWindow.scrollTo(0, nextPreviewTop);
+  requestAnimationFrame(() => {
+    if (activeScrollSyncSource === 'raw') activeScrollSyncSource = null;
+  });
+}
+
+function syncRawScrollWithPreview() {
+  if (!syncViewsEnabled) return;
+  if (!showRaw || !showFormatted) return;
+  if (!frame.contentDocument) return;
 
   const doc = frame.contentDocument;
   const scrollEl = doc.scrollingElement || doc.documentElement || doc.body;
-  const previewMax = Math.max(0, scrollEl.scrollHeight - scrollEl.clientHeight);
-  const nextPreviewTop = Math.round(previewMax * rawRatio);
-  frame.contentWindow.scrollTo(0, nextPreviewTop);
+  const anchorCache = getPreviewLineAnchors();
+  const anchors = anchorCache?.anchors || [];
+
+  let nextRawTop = null;
+  const previewMax = Math.max(1, scrollEl.scrollHeight - scrollEl.clientHeight);
+  const previewRatio = scrollEl.scrollTop / previewMax;
+  const useRatioSync = shouldUseRatioScrollSync(anchors);
+
+  if (useRatioSync) {
+    const rawMax = Math.max(0, rawEditor.scrollHeight - rawEditor.clientHeight);
+    nextRawTop = Math.round(rawMax * previewRatio);
+  } else {
+    const computedRaw = window.getComputedStyle(rawEditor);
+    const rawLineHeight = Number.parseFloat(computedRaw.lineHeight);
+    const usableLineHeight = Number.isFinite(rawLineHeight) && rawLineHeight > 0 ? rawLineHeight : 20;
+
+    if (anchors.length > 0) {
+      const previewTop = scrollEl.scrollTop;
+      let anchorIndex = 0;
+      for (let i = 0; i < anchors.length; i += 1) {
+        const top = anchors[i].top;
+        if (top <= previewTop + 1) anchorIndex = i;
+        else break;
+      }
+
+      const active = anchors[anchorIndex];
+      const next = anchors[Math.min(anchorIndex + 1, anchors.length - 1)];
+      const activeTop = active.top;
+      const nextTop = next
+        ? next.top
+        : Math.max(activeTop + 1, scrollEl.scrollHeight - scrollEl.clientHeight);
+      const blockHeight = Math.max(1, nextTop - activeTop);
+      const blockProgress = Math.max(0, Math.min(1, (previewTop - activeTop) / blockHeight));
+
+      const startLine = active.line;
+      const endLine = Math.max(startLine + 1, next.line || (startLine + 1));
+      const mappedLine = startLine + ((endLine - startLine) * blockProgress);
+      nextRawTop = Math.round(mappedLine * usableLineHeight);
+    }
+  }
+
+  if (nextRawTop === null) {
+    const rawMax = Math.max(0, rawEditor.scrollHeight - rawEditor.clientHeight);
+    nextRawTop = Math.round(rawMax * previewRatio);
+  }
+
+  const rawMax = Math.max(0, rawEditor.scrollHeight - rawEditor.clientHeight);
+  if (nextRawTop > rawMax) nextRawTop = rawMax;
+  if (nextRawTop < 0) nextRawTop = 0;
+  activeScrollSyncSource = 'preview';
+  rawEditor.scrollTop = nextRawTop;
+  requestAnimationFrame(() => {
+    if (activeScrollSyncSource === 'preview') activeScrollSyncSource = null;
+  });
 }
 
 function cursorLineFromRawSelection() {
@@ -2280,6 +2563,16 @@ function schedulePreviewScrollSync() {
   previewScrollSyncRaf = requestAnimationFrame(() => {
     previewScrollSyncRaf = null;
     syncPreviewScrollWithRaw();
+  });
+}
+
+function scheduleRawScrollSync() {
+  if (rawScrollSyncRaf !== null) {
+    cancelAnimationFrame(rawScrollSyncRaf);
+  }
+  rawScrollSyncRaf = requestAnimationFrame(() => {
+    rawScrollSyncRaf = null;
+    syncRawScrollWithPreview();
   });
 }
 
@@ -3096,6 +3389,22 @@ async function loadRecentFile(filePath) {
   await addRecentFile(loaded.path);
 }
 
+async function loadFileByPath(filePath, context = 'opening a file') {
+  if (!filePath) return;
+  const canProceed = await confirmUnsavedChanges(context);
+  if (!canProceed) return;
+
+  const loaded = await window.nativeApi.openFilePath({ path: filePath });
+  if (!loaded) {
+    window.alert('Unable to open the selected file.');
+    await refreshRecentFilesMenu();
+    return;
+  }
+
+  applyLoadedDocument(loaded);
+  await addRecentFile(loaded.path);
+}
+
 async function createNewDocument(options = {}) {
   const initialContent = options?.initialContent ?? '';
   const markDirty = Boolean(options?.markDirty);
@@ -3173,8 +3482,8 @@ async function saveCurrentFile(saveAs = false, options = {}) {
     path: currentFilePath,
     content: markdownState,
     renderedHtml,
-    themeCssText: userCssText || '',
-    darkMode,
+    themeCssText: buildExportThemeCss(),
+    darkMode: false,
     exportPresets: {
       html: exportHtmlPreset,
       pdf: exportPdfPreset,
@@ -3216,8 +3525,8 @@ async function exportToPages() {
     path: currentFilePath,
     content: markdownState,
     renderedHtml,
-    themeCssText: userCssText || '',
-    darkMode,
+    themeCssText: buildExportThemeCss(),
+    darkMode: false,
     exportPresets: {
       html: exportHtmlPreset,
       pdf: exportPdfPreset,
@@ -3392,6 +3701,11 @@ async function handleAction(action, payload = {}) {
     case 'file-open-recent':
       if (payload.path) {
         await loadRecentFile(payload.path);
+      }
+      break;
+    case 'file-open-path':
+      if (payload.path) {
+        await loadFileByPath(payload.path, 'opening a file');
       }
       break;
     case 'file-clear-recent':
@@ -3635,6 +3949,12 @@ async function handleAction(action, payload = {}) {
     case 'set-sync-views':
       setSyncViewsEnabled(Boolean(payload.enabled));
       break;
+    case 'toggle-word-wrap':
+      setWordWrapEnabled(!wordWrapEnabled);
+      break;
+    case 'set-word-wrap':
+      setWordWrapEnabled(Boolean(payload.enabled));
+      break;
     case 'toggle-mermaid-preview':
       setMermaidPreviewEnabled(!mermaidPreviewEnabled);
       break;
@@ -3867,6 +4187,10 @@ function wireKeyboardShortcuts() {
 }
 
 function wireEvents() {
+  window.addEventListener('resize', () => {
+    invalidatePreviewAnchorCache();
+  });
+
   rawEditor.addEventListener('input', handleRawEdit);
   rawEditor.addEventListener('keyup', () => {
     syncPreviewToRawCursor();
@@ -3877,6 +4201,10 @@ function wireEvents() {
     publishSessionState();
   });
   rawEditor.addEventListener('scroll', () => {
+    if (activeScrollSyncSource === 'preview') {
+      publishSessionState();
+      return;
+    }
     schedulePreviewScrollSync();
     publishSessionState();
   });
@@ -3925,6 +4253,7 @@ function wireEvents() {
 
   frame.addEventListener('load', () => {
     diagnosticLog('renderer.frame.load');
+    invalidatePreviewAnchorCache();
     void updateFrameCss();
     applyFrameTheme();
     const split = splitFrontMatter(markdownState);
@@ -3950,9 +4279,22 @@ function wireEvents() {
       syncRawToPreviewCursor();
       publishSessionState();
     });
-    doc.addEventListener('scroll', () => {
+    const onPreviewScroll = () => {
+      if (activeScrollSyncSource === 'raw') {
+        publishSessionState();
+        return;
+      }
+      scheduleRawScrollSync();
       publishSessionState();
-    }, true);
+    };
+    doc.addEventListener('scroll', onPreviewScroll, true);
+    const scrollEl = doc.scrollingElement || doc.documentElement || doc.body;
+    if (scrollEl) {
+      scrollEl.addEventListener('scroll', onPreviewScroll, { passive: true });
+    }
+    if (frame.contentWindow) {
+      frame.contentWindow.addEventListener('scroll', onPreviewScroll, { passive: true });
+    }
     schedulePreviewScrollSync();
     updateThemeDebug();
   });
@@ -4063,6 +4405,7 @@ function bootstrap() {
   setEmbeddedMenu(false);
   setThemeDebugVisible(false);
   setSyncViewsEnabled(true, { persist: false });
+  setWordWrapEnabled(false, { persist: false });
   setMermaidPreviewEnabled(false, { persist: false });
   setDarkModeSyncSystem(false, { persist: false, applySystem: false });
   setDarkMode(false, { persist: false });
@@ -4120,6 +4463,10 @@ function bootstrap() {
     const savedSyncViews = await loadSyncViewsPreference();
     setSyncViewsEnabled(savedSyncViews, { persist: false });
     diagnosticLog('renderer.startup.sync-views.loaded', { enabled: savedSyncViews });
+
+    const savedWordWrap = await loadWordWrapPreference();
+    setWordWrapEnabled(savedWordWrap, { persist: false });
+    diagnosticLog('renderer.startup.word-wrap.loaded', { enabled: savedWordWrap });
 
     const savedMermaidPreview = await loadMermaidPreviewPreference();
     setMermaidPreviewEnabled(savedMermaidPreview, { persist: false });

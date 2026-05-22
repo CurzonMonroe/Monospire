@@ -89,6 +89,7 @@
             <button data-action="zoom-formatted-reset">Reset Preview Zoom</button>
             <div class="menu-separator"></div>
             <button data-action="toggle-sync-views" data-toggle="sync-views">Syncronise Views</button>
+            <button data-action="toggle-word-wrap" data-toggle="word-wrap">Word Wrap</button>
             <div class="menu-separator"></div>
             <button data-action="toggle-outline-view" data-toggle="outline-view">Show Outline</button>
             <button data-action="outline-left" data-toggle="outline-left">Outline Left</button>
@@ -222,7 +223,7 @@
 
       <main id="workspace" class="workspace mode-raw">
         <section id="raw-pane" class="pane pane-raw">
-          <textarea id="raw-editor" spellcheck="true" aria-label="Raw Markdown editor"></textarea>
+          <textarea id="raw-editor" wrap="off" spellcheck="true" aria-label="Raw Markdown editor"></textarea>
         </section>
 
         <section id="formatted-pane" class="pane pane-formatted">

@@ -1,14 +1,14 @@
 {
   "name": "monospire",
   "productName": "Monospire",
-  "version": "1.2.1",
+  "version": "1.2.2",
   "description": "Monospire: native-feeling macOS Markdown editor with ribbon and dual editing views.",
   "main": "main.js",
   "scripts": {
     "start": "electron .",
     "pack:app": "bash ./scripts/package-app.sh",
     "pack:mac": "electron-builder --mac --dir",
-    "dist:mac": "electron-builder --mac",
+    "dist:mac": "electron-builder --mac && npm run brew:cask",
     "brew:cask": "bash ./scripts/generate-homebrew-cask.sh"
   },
   "keywords": [
@@ -27,7 +27,7 @@
   "build": {
     "appId": "com.monospire.app",
     "productName": "Monospire",
-    "buildVersion": "1.2.1.0",
+    "buildVersion": "1.2.2.0",
     "asar": false,
     "files": [
       "main.js",
