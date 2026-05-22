@@ -7,7 +7,6 @@ cask "monospire" do
   desc "Native-feeling macOS Markdown editor with dual editing views"
   homepage "https://github.com/CurzonMonroe/Monospire"
 
-  auto_updates true
   depends_on macos: ">= :ventura"
 
   app "Monospire.app"

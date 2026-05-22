@@ -96,7 +96,6 @@ cask "monospire" do
   desc "Native-feeling macOS Markdown editor with dual editing views"
   homepage "${HOMEPAGE_URL}"
 
-  auto_updates true
   depends_on macos: ">= :ventura"
 
   app "Monospire.app"
