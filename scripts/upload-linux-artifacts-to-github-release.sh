@@ -96,6 +96,56 @@ api_request() {
   fi
 }
 
+api_request_with_status() {
+  local method="$1"
+  local url="$2"
+  local data="${3:-}"
+  local body_file status
+
+  body_file="$(mktemp)"
+  if [[ -n "${data}" ]]; then
+    status="$(
+      curl --silent --show-error \
+        -o "${body_file}" \
+        -w "%{http_code}" \
+        -X "${method}" \
+        -H "Accept: application/vnd.github+json" \
+        -H "Authorization: Bearer ${TOKEN}" \
+        -H "X-GitHub-Api-Version: 2022-11-28" \
+        -H "Content-Type: application/json" \
+        --data "${data}" \
+        "${url}"
+    )"
+  else
+    status="$(
+      curl --silent --show-error \
+        -o "${body_file}" \
+        -w "%{http_code}" \
+        -X "${method}" \
+        -H "Accept: application/vnd.github+json" \
+        -H "Authorization: Bearer ${TOKEN}" \
+        -H "X-GitHub-Api-Version: 2022-11-28" \
+        "${url}"
+    )"
+  fi
+
+  cat "${body_file}"
+  rm -f "${body_file}"
+  printf '\n%s' "${status}"
+}
+
+github_error_message() {
+  node -e '
+const fs = require("fs");
+const input = fs.readFileSync(0, "utf8");
+try {
+  const data = JSON.parse(input);
+  if (data.message) process.stdout.write(data.message);
+} catch {
+}
+'
+}
+
 json_value() {
   node -e '
 const fs = require("fs");
@@ -107,12 +157,20 @@ if (value !== undefined && value !== null) process.stdout.write(String(value));
 ' "$1"
 }
 
-release_json=""
-if release_json="$(api_request GET "https://api.github.com/repos/${REPO}/releases/tags/${TAG_NAME}" 2>/tmp/monospire-github-release-error.log)"; then
+release_response="$(api_request_with_status GET "https://api.github.com/repos/${REPO}/releases/tags/${TAG_NAME}")"
+release_status="$(printf '%s' "${release_response}" | tail -n 1)"
+release_json="$(printf '%s' "${release_response}" | sed '$d')"
+
+if [[ "${release_status}" == "200" ]]; then
   echo "Found GitHub release ${TAG_NAME}."
-else
+elif [[ "${release_status}" == "404" ]]; then
   echo "Creating GitHub release ${TAG_NAME}."
   release_json="$(api_request POST "https://api.github.com/repos/${REPO}/releases" "{\"tag_name\":\"${TAG_NAME}\",\"name\":\"Monospire ${TAG_NAME}\",\"draft\":false,\"prerelease\":false}")"
+else
+  release_message="$(printf '%s' "${release_json}" | github_error_message)"
+  echo "GitHub release lookup failed with HTTP ${release_status}: ${release_message:-unknown error}" >&2
+  echo "Check that GH_RELEASE_TOKEN is a valid GitHub token with Contents: Read and write access to ${REPO}." >&2
+  exit 1
 fi
 
 release_id="$(printf '%s' "${release_json}" | json_value id)"
