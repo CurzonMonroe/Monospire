@@ -1,8 +1,8 @@
 cask "monospire" do
-  version "1.2.2"
-  sha256 "1507e65044d3d7bc63f8d614a665348138a6590d61a16cf0ea031e8631027c32"
+  version "1.2.3"
+  sha256 "b9bb06faeaa94d454dc91cd2614dfa15002d43a3c3e6a1fa6b3349323d1c13d7"
 
-  url "https://github.com/CurzonMonroe/Monospire/releases/download/v1.2.2/Monospire-1.2.2-arm64.dmg"
+  url "https://github.com/CurzonMonroe/Monospire/releases/download/v1.2.3/Monospire-1.2.3-arm64.dmg"
   name "Monospire"
   desc "Native-feeling macOS Markdown editor with dual editing views"
   homepage "https://github.com/CurzonMonroe/Monospire"

@@ -705,6 +705,13 @@ function buildAppMenu() {
           checked: false,
           click: (item) => sendMenuAction('set-word-wrap', { enabled: item.checked })
         },
+        {
+          id: 'line-numbers',
+          label: 'Line Numbers',
+          type: 'checkbox',
+          checked: false,
+          click: (item) => sendMenuAction('set-line-numbers', { enabled: item.checked })
+        },
         { type: 'separator' },
         {
           id: 'toggle-outline',
@@ -891,18 +898,25 @@ function buildAppMenu() {
             },
             { type: 'separator' },
             {
-              id: 'theme-dark-mode',
-              label: 'Dark mode',
-              type: 'checkbox',
-              checked: false,
-              click: (item) => sendMenuAction('set-dark-mode', { enabled: item.checked })
+              id: 'theme-mode-light',
+              label: 'Theme: Light',
+              type: 'radio',
+              checked: true,
+              click: () => sendMenuAction('set-dark-mode-mode', { mode: 'light' })
             },
             {
-              id: 'theme-sync-system',
-              label: 'Sync Dark Mode with System',
-              type: 'checkbox',
+              id: 'theme-mode-dark',
+              label: 'Theme: Dark',
+              type: 'radio',
               checked: false,
-              click: (item) => sendMenuAction('set-dark-mode-sync', { enabled: item.checked })
+              click: () => sendMenuAction('set-dark-mode-mode', { mode: 'dark' })
+            },
+            {
+              id: 'theme-mode-auto',
+              label: 'Theme: Auto',
+              type: 'radio',
+              checked: false,
+              click: () => sendMenuAction('set-dark-mode-mode', { mode: 'auto' })
             },
             {
               id: 'display-menu-in-app',
@@ -1736,22 +1750,37 @@ ipcMain.handle('save-default-template-preference', async (_event, payload) => {
 
 ipcMain.handle('save-dark-mode-preference', async (_event, payload) => {
   const settings = await readSettings();
-  settings.darkMode = Boolean(payload?.enabled);
+  const mode = payload?.mode;
+  if (mode === 'light' || mode === 'dark' || mode === 'auto') {
+    settings.darkModeMode = mode;
+    settings.darkModeSyncSystem = mode === 'auto';
+    settings.darkMode = mode === 'dark';
+  } else {
+    settings.darkMode = Boolean(payload?.enabled);
+    settings.darkModeMode = settings.darkMode ? 'dark' : 'light';
+  }
   await writeSettings(settings);
   return { saved: true };
 });
 
 ipcMain.handle('load-dark-mode-preference', async () => {
   const settings = await readSettings();
+  if (settings.darkModeMode === 'light' || settings.darkModeMode === 'dark' || settings.darkModeMode === 'auto') {
+    return { loaded: true, enabled: settings.darkModeMode === 'dark', mode: settings.darkModeMode };
+  }
+  if (settings.darkModeSyncSystem === true) {
+    return { loaded: true, enabled: false, mode: 'auto' };
+  }
   if (typeof settings.darkMode !== 'boolean') {
     return { loaded: false, enabled: false };
   }
-  return { loaded: true, enabled: settings.darkMode };
+  return { loaded: true, enabled: settings.darkMode, mode: settings.darkMode ? 'dark' : 'light' };
 });
 
 ipcMain.handle('save-dark-mode-sync-preference', async (_event, payload) => {
   const settings = await readSettings();
   settings.darkModeSyncSystem = payload?.enabled === true;
+  settings.darkModeMode = settings.darkModeSyncSystem ? 'auto' : (settings.darkMode ? 'dark' : 'light');
   await writeSettings(settings);
   return { saved: true };
 });
@@ -1816,6 +1845,21 @@ ipcMain.handle('load-word-wrap-preference', async () => {
     return { loaded: false, enabled: false };
   }
   return { loaded: true, enabled: settings.wordWrap };
+});
+
+ipcMain.handle('save-line-numbers-preference', async (_event, payload) => {
+  const settings = await readSettings();
+  settings.lineNumbers = payload?.enabled === true;
+  await writeSettings(settings);
+  return { saved: true };
+});
+
+ipcMain.handle('load-line-numbers-preference', async () => {
+  const settings = await readSettings();
+  if (typeof settings.lineNumbers !== 'boolean') {
+    return { loaded: false, enabled: false };
+  }
+  return { loaded: true, enabled: settings.lineNumbers };
 });
 
 ipcMain.handle('save-mermaid-preview-preference', async (_event, payload) => {
@@ -2367,8 +2411,9 @@ ipcMain.on('update-menu-state', (event, payload) => {
 
   const rawItem = menu.getMenuItemById('toggle-raw');
   const formattedItem = menu.getMenuItemById('toggle-formatted');
-  const darkModeItem = menu.getMenuItemById('theme-dark-mode');
-  const darkModeSyncItem = menu.getMenuItemById('theme-sync-system');
+  const themeModeLight = menu.getMenuItemById('theme-mode-light');
+  const themeModeDark = menu.getMenuItemById('theme-mode-dark');
+  const themeModeAuto = menu.getMenuItemById('theme-mode-auto');
   const ribbonIcons = menu.getMenuItemById('ribbon-icons-only');
   const ribbonText = menu.getMenuItemById('ribbon-text-only');
   const ribbonBoth = menu.getMenuItemById('ribbon-icons-text');
@@ -2381,6 +2426,7 @@ ipcMain.on('update-menu-state', (event, payload) => {
   const themeDebugItem = menu.getMenuItemById('display-theme-debug');
   const syncViewsItem = menu.getMenuItemById('sync-views');
   const wordWrapItem = menu.getMenuItemById('word-wrap');
+  const lineNumbersItem = menu.getMenuItemById('line-numbers');
   const mermaidPreviewItem = menu.getMenuItemById('mermaid-preview-experimental');
   const outlineItem = menu.getMenuItemById('toggle-outline');
   const outlineLeftItem = menu.getMenuItemById('outline-left');
@@ -2401,9 +2447,16 @@ ipcMain.on('update-menu-state', (event, payload) => {
 
   if (rawItem && typeof payload.showRaw === 'boolean') rawItem.checked = payload.showRaw;
   if (formattedItem && typeof payload.showFormatted === 'boolean') formattedItem.checked = payload.showFormatted;
-  if (darkModeItem && typeof payload.darkMode === 'boolean') darkModeItem.checked = payload.darkMode;
-  if (darkModeSyncItem && typeof payload.darkModeSyncSystem === 'boolean') darkModeSyncItem.checked = payload.darkModeSyncSystem;
-  if (darkModeItem && typeof payload.darkModeSyncSystem === 'boolean') darkModeItem.enabled = !payload.darkModeSyncSystem;
+  const darkModeMode = payload.darkModeMode === 'light' || payload.darkModeMode === 'dark' || payload.darkModeMode === 'auto'
+    ? payload.darkModeMode
+    : payload.darkModeSyncSystem === true
+      ? 'auto'
+      : payload.darkMode === true
+        ? 'dark'
+        : 'light';
+  if (themeModeLight) themeModeLight.checked = darkModeMode === 'light';
+  if (themeModeDark) themeModeDark.checked = darkModeMode === 'dark';
+  if (themeModeAuto) themeModeAuto.checked = darkModeMode === 'auto';
 
   if (payload.ribbonMode === 'icons' && ribbonIcons) ribbonIcons.checked = true;
   if (payload.ribbonMode === 'text' && ribbonText) ribbonText.checked = true;
@@ -2419,6 +2472,7 @@ ipcMain.on('update-menu-state', (event, payload) => {
   if (themeDebugItem && typeof payload.themeDebugVisible === 'boolean') themeDebugItem.checked = payload.themeDebugVisible;
   if (syncViewsItem && typeof payload.syncViewsEnabled === 'boolean') syncViewsItem.checked = payload.syncViewsEnabled;
   if (wordWrapItem && typeof payload.wordWrapEnabled === 'boolean') wordWrapItem.checked = payload.wordWrapEnabled;
+  if (lineNumbersItem && typeof payload.lineNumbersEnabled === 'boolean') lineNumbersItem.checked = payload.lineNumbersEnabled;
   if (mermaidPreviewItem && typeof payload.mermaidPreviewEnabled === 'boolean') mermaidPreviewItem.checked = payload.mermaidPreviewEnabled;
   if (outlineItem && typeof payload.outlineVisible === 'boolean') outlineItem.checked = payload.outlineVisible;
   if (outlineLeftItem && typeof payload.outlineVisible === 'boolean') outlineLeftItem.enabled = payload.outlineVisible;

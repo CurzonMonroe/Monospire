@@ -90,6 +90,7 @@
             <div class="menu-separator"></div>
             <button data-action="toggle-sync-views" data-toggle="sync-views">Syncronise Views</button>
             <button data-action="toggle-word-wrap" data-toggle="word-wrap">Word Wrap</button>
+            <button data-action="toggle-line-numbers" data-toggle="line-numbers">Line Numbers</button>
             <div class="menu-separator"></div>
             <button data-action="toggle-outline-view" data-toggle="outline-view">Show Outline</button>
             <button data-action="outline-left" data-toggle="outline-left">Outline Left</button>
@@ -131,8 +132,9 @@
             <button data-action="ribbon-text">Ribbon: Text only</button>
             <button data-action="ribbon-both">Ribbon: Icons and Text</button>
             <button data-action="toggle-embedded-menu" data-toggle="embedded-menu">Display Menu in App</button>
-            <button data-action="toggle-dark-mode" data-toggle="dark-mode">Dark mode</button>
-            <button data-action="toggle-dark-mode-sync" data-toggle="dark-mode-sync">Sync Dark Mode with System</button>
+            <button data-action="set-dark-mode-mode" data-mode="light" data-toggle="dark-mode-light">Theme: Light</button>
+            <button data-action="set-dark-mode-mode" data-mode="dark" data-toggle="dark-mode-dark">Theme: Dark</button>
+            <button data-action="set-dark-mode-mode" data-mode="auto" data-toggle="dark-mode-auto">Theme: Auto</button>
             <div class="menu-separator"></div>
             <div class="menu-subheader">Proofing</div>
             <button data-action="toggle-spellcheck" data-toggle="spellcheck">Spell Check</button>
@@ -211,11 +213,12 @@
           </button>
         </div>
         <div class="ribbon-tail">
-          <span class="ribbon-tail-label">Dark</span>
-          <label class="ribbon-switch" title="Toggle dark mode">
-            <input id="ribbon-dark-toggle" type="checkbox" aria-label="Toggle dark mode" />
-            <span class="ribbon-switch-slider"></span>
-          </label>
+          <span class="ribbon-tail-label">Theme</span>
+          <div class="ribbon-theme-control" aria-label="Theme mode">
+            <button type="button" data-action="set-dark-mode-mode" data-mode="light" data-theme-mode="light" title="Light theme">Light</button>
+            <button type="button" data-action="set-dark-mode-mode" data-mode="dark" data-theme-mode="dark" title="Dark theme">Dark</button>
+            <button type="button" data-action="set-dark-mode-mode" data-mode="auto" data-theme-mode="auto" title="Follow system theme">Auto</button>
+          </div>
         </div>
       </section>
 
@@ -223,7 +226,12 @@
 
       <main id="workspace" class="workspace mode-raw">
         <section id="raw-pane" class="pane pane-raw">
-          <textarea id="raw-editor" wrap="off" spellcheck="true" aria-label="Raw Markdown editor"></textarea>
+          <div id="raw-editor-shell" class="raw-editor-shell">
+            <div id="raw-line-number-gutter" class="raw-line-number-gutter" aria-hidden="true">
+              <div id="raw-line-number-list" class="raw-line-number-list">1</div>
+            </div>
+            <textarea id="raw-editor" wrap="off" spellcheck="true" aria-label="Raw Markdown editor"></textarea>
+          </div>
         </section>
 
         <section id="formatted-pane" class="pane pane-formatted">
@@ -238,6 +246,7 @@
 
       <footer class="status-bar no-drag" id="status-bar">
         <span id="status-last-saved">Last Saved: Never</span>
+        <span id="status-line-count">Lines: 1</span>
         <span id="status-word-count">Words: 0</span>
         <span id="status-char-count">Characters: 0</span>
         <span id="status-image-count">Images: 0</span>

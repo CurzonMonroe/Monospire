@@ -539,10 +539,12 @@ const body = document.body;
 const workspace = document.getElementById('workspace');
 const menuBar = document.getElementById('menu-bar');
 const rawEditor = document.getElementById('raw-editor');
+const rawEditorShell = document.getElementById('raw-editor-shell');
+const rawLineNumberList = document.getElementById('raw-line-number-list');
 const frame = document.getElementById('formatted-frame');
 const titlebarText = document.getElementById('titlebar-text');
 const themeDebug = document.getElementById('theme-debug');
-const ribbonDarkToggle = document.getElementById('ribbon-dark-toggle');
+const ribbonThemeModeButtons = [...document.querySelectorAll('[data-theme-mode]')];
 const recentFilesMenu = document.getElementById('recent-files-menu');
 const tocPane = document.getElementById('toc-pane');
 const tocList = document.getElementById('toc-list');
@@ -566,6 +568,7 @@ const keybindingsList = document.getElementById('keybindings-list');
 const versionHistoryModal = document.getElementById('version-history-modal');
 const versionHistoryList = document.getElementById('version-history-list');
 const statusLastSaved = document.getElementById('status-last-saved');
+const statusLineCount = document.getElementById('status-line-count');
 const statusWordCount = document.getElementById('status-word-count');
 const statusCharCount = document.getElementById('status-char-count');
 const statusImageCount = document.getElementById('status-image-count');
@@ -596,11 +599,13 @@ let spellcheckEnabled = true;
 let dictionaryLanguage = 'en-US';
 let listContinuationMode = null;
 let darkMode = false;
+let darkModeMode = 'light';
 let darkModeSyncSystem = false;
 let embeddedMenu = false;
 let themeDebugVisible = false;
 let syncViewsEnabled = true;
 let wordWrapEnabled = false;
+let lineNumbersEnabled = false;
 let mermaidPreviewEnabled = false;
 let outlineVisible = true;
 let outlinePosition = 'right';
@@ -612,6 +617,9 @@ const rawRedoStack = [];
 let suppressRawHandler = false;
 let suppressFrameHandler = false;
 let lastRawSnapshot = { text: markdownState, selectionStart: 0, selectionEnd: 0 };
+let lastLineNumberCount = 0;
+let lastLineNumberSignature = '';
+let lastRawLineMetrics = null;
 let formattedNormalizeTimer = null;
 let lastFindQuery = '';
 let rawFindCursor = 0;
@@ -764,13 +772,162 @@ function computeImageCount(source) {
   return markdownImages.length + htmlImages.length;
 }
 
+function countMarkdownLines(source) {
+  const text = source || '';
+  return text.length === 0 ? 1 : text.split('\n').length;
+}
+
 function updateStatusBar() {
-  if (!statusLastSaved || !statusWordCount || !statusCharCount || !statusImageCount) return;
+  if (!statusLastSaved || !statusLineCount || !statusWordCount || !statusCharCount || !statusImageCount) return;
 
   statusLastSaved.textContent = `Last Saved: ${formatSavedDateTime(lastSavedAt)}`;
+  statusLineCount.textContent = `Lines: ${countMarkdownLines(markdownState)}`;
   statusWordCount.textContent = `Words: ${computeWordCount(markdownState)}`;
   statusCharCount.textContent = `Characters: ${(markdownState || '').length}`;
   statusImageCount.textContent = `Images: ${computeImageCount(markdownState)}`;
+}
+
+function countRawEditorLines() {
+  return countMarkdownLines(rawEditor.value);
+}
+
+function getRawEditorLineHeight() {
+  const style = window.getComputedStyle(rawEditor);
+  const parsed = Number.parseFloat(style.lineHeight);
+  if (Number.isFinite(parsed)) return parsed;
+  const fontSize = Number.parseFloat(style.fontSize);
+  return Number.isFinite(fontSize) ? fontSize * 1.6 : 22.4;
+}
+
+function measureWrappedRawLineHeights(lines) {
+  const lineHeight = getRawEditorLineHeight();
+  if (!wordWrapEnabled || !rawEditor.clientWidth) {
+    return lines.map(() => lineHeight);
+  }
+
+  const style = window.getComputedStyle(rawEditor);
+  const paddingLeft = Number.parseFloat(style.paddingLeft) || 0;
+  const paddingRight = Number.parseFloat(style.paddingRight) || 0;
+  const contentWidth = Math.max(1, rawEditor.clientWidth - paddingLeft - paddingRight);
+  const measurer = document.createElement('div');
+  measurer.style.position = 'fixed';
+  measurer.style.left = '-10000px';
+  measurer.style.top = '0';
+  measurer.style.visibility = 'hidden';
+  measurer.style.boxSizing = 'border-box';
+  measurer.style.width = `${contentWidth}px`;
+  measurer.style.font = style.font;
+  measurer.style.fontSize = style.fontSize;
+  measurer.style.fontFamily = style.fontFamily;
+  measurer.style.fontWeight = style.fontWeight;
+  measurer.style.fontStyle = style.fontStyle;
+  measurer.style.letterSpacing = style.letterSpacing;
+  measurer.style.lineHeight = style.lineHeight;
+  measurer.style.whiteSpace = 'pre-wrap';
+  measurer.style.overflowWrap = 'break-word';
+  measurer.style.tabSize = style.tabSize || '8';
+  document.body.appendChild(measurer);
+
+  const heights = lines.map((line) => {
+    measurer.textContent = line.length > 0 ? line : ' ';
+    return Math.max(lineHeight, measurer.scrollHeight);
+  });
+  measurer.remove();
+  return heights;
+}
+
+function rawLineMetricSignature() {
+  return [
+    wordWrapEnabled ? 'wrap' : 'nowrap',
+    rawEditor.clientWidth,
+    rawEditor.style.fontSize || '',
+    rawEditor.value
+  ].join(':');
+}
+
+function getRawLineMetrics({ force = false } = {}) {
+  const text = rawEditor.value || '';
+  const lines = text.split('\n');
+  const signature = rawLineMetricSignature();
+  if (!force && lastRawLineMetrics?.signature === signature) {
+    return lastRawLineMetrics;
+  }
+
+  const style = window.getComputedStyle(rawEditor);
+  const paddingTop = Number.parseFloat(style.paddingTop) || 0;
+  const paddingBottom = Number.parseFloat(style.paddingBottom) || 0;
+  const heights = measureWrappedRawLineHeights(lines);
+  const tops = [];
+  let cursor = paddingTop;
+  for (const height of heights) {
+    tops.push(cursor);
+    cursor += height;
+  }
+
+  lastRawLineMetrics = {
+    signature,
+    lines,
+    heights,
+    tops,
+    totalHeight: cursor + paddingBottom,
+    paddingTop
+  };
+  return lastRawLineMetrics;
+}
+
+function rawLinePositionFromScrollTop(scrollTop) {
+  const metrics = getRawLineMetrics();
+  const tops = metrics.tops;
+  if (tops.length === 0) return { line: 0, progress: 0 };
+  const y = Math.max(0, scrollTop || 0);
+  let index = 0;
+  for (let i = 0; i < tops.length; i += 1) {
+    if (tops[i] <= y) index = i;
+    else break;
+  }
+  const start = tops[index] ?? metrics.paddingTop;
+  const end = index + 1 < tops.length
+    ? tops[index + 1]
+    : Math.max(start + 1, metrics.totalHeight);
+  const progress = Math.max(0, Math.min(1, (y - start) / Math.max(1, end - start)));
+  return { line: index, progress };
+}
+
+function rawScrollTopForLinePosition(line, progress = 0) {
+  const metrics = getRawLineMetrics();
+  const index = Math.max(0, Math.min(metrics.tops.length - 1, Math.floor(line || 0)));
+  const start = metrics.tops[index] ?? metrics.paddingTop;
+  const end = index + 1 < metrics.tops.length
+    ? metrics.tops[index + 1]
+    : Math.max(start + 1, metrics.totalHeight);
+  return Math.round(start + ((end - start) * Math.max(0, Math.min(1, progress))));
+}
+
+function updateLineNumberScroll() {
+  if (!rawLineNumberList) return;
+  rawLineNumberList.style.transform = `translateY(-${rawEditor.scrollTop || 0}px)`;
+}
+
+function updateLineNumbers({ force = false } = {}) {
+  if (!rawLineNumberList) return;
+  const metrics = getRawLineMetrics({ force });
+  const lines = metrics.lines;
+  const lineCount = countRawEditorLines();
+  const signature = `${lineCount}:${metrics.signature}`;
+
+  if (force || signature !== lastLineNumberSignature || lineCount !== lastLineNumberCount) {
+    rawLineNumberList.replaceChildren();
+    for (let index = 0; index < lineCount; index += 1) {
+      const row = document.createElement('div');
+      row.className = 'raw-line-number-row';
+      row.textContent = String(index + 1);
+      row.style.height = `${metrics.heights[index] || getRawEditorLineHeight()}px`;
+      rawLineNumberList.appendChild(row);
+    }
+    lastLineNumberCount = lineCount;
+    lastLineNumberSignature = signature;
+  }
+  updateLineNumberScroll();
 }
 
 async function loadKeybindingsPreference() {
@@ -872,6 +1029,7 @@ function applySessionState(state) {
   currentFileName = state.currentFileName || (currentFilePath ? basename(currentFilePath) : 'Untitled.md');
   markdownState = typeof state.markdown === 'string' ? state.markdown : '';
   rawEditor.value = markdownState;
+  updateLineNumbers({ force: true });
   savedBaseline = typeof state.savedBaseline === 'string' ? state.savedBaseline : markdownState;
   lastSavedAt = state.lastSavedAt || null;
   docSessionKey = state.docSessionKey || docSessionKey;
@@ -885,6 +1043,7 @@ function applySessionState(state) {
   const selEnd = Number.isFinite(state.rawSelectionEnd) ? Math.max(0, state.rawSelectionEnd) : selStart;
   rawEditor.setSelectionRange(selStart, selEnd);
   rawEditor.scrollTop = Number.isFinite(state.rawScrollTop) ? Math.max(0, state.rawScrollTop) : 0;
+  updateLineNumberScroll();
   setTimeout(() => {
     const doc = frame.contentDocument;
     const scrollEl = doc?.scrollingElement || doc?.documentElement || doc?.body;
@@ -1283,9 +1442,12 @@ function commandPaletteCommands() {
     { label: 'View: Outline Right', action: 'outline-right' },
     { label: 'View: Syncronise Views', action: 'toggle-sync-views' },
     { label: 'View: Toggle Word Wrap', action: 'toggle-word-wrap' },
+    { label: 'View: Toggle Line Numbers', action: 'toggle-line-numbers' },
     { label: 'Tools: Edit Front Matter', action: 'edit-front-matter' },
     { label: 'Tools: Load Theme', action: 'load-theme' },
-    { label: 'Tools: Toggle Dark Mode', action: 'toggle-dark-mode' }
+    { label: 'Tools: Theme Light', action: 'set-dark-mode-mode', payload: { mode: 'light' } },
+    { label: 'Tools: Theme Dark', action: 'set-dark-mode-mode', payload: { mode: 'dark' } },
+    { label: 'Tools: Theme Auto', action: 'set-dark-mode-mode', payload: { mode: 'auto' } }
   ];
 }
 
@@ -1395,10 +1557,12 @@ function updateMenuChecks() {
   const spellcheckToggle = document.querySelector('[data-toggle="spellcheck"]');
   const dictionaryUsToggle = document.querySelector('[data-toggle="dictionary-en-us"]');
   const dictionaryGbToggle = document.querySelector('[data-toggle="dictionary-en-gb"]');
-  const darkModeToggle = document.querySelector('[data-toggle="dark-mode"]');
-  const darkModeSyncToggle = document.querySelector('[data-toggle="dark-mode-sync"]');
+  const darkModeLightToggle = document.querySelector('[data-toggle="dark-mode-light"]');
+  const darkModeDarkToggle = document.querySelector('[data-toggle="dark-mode-dark"]');
+  const darkModeAutoToggle = document.querySelector('[data-toggle="dark-mode-auto"]');
   const syncViewsToggle = document.querySelector('[data-toggle="sync-views"]');
   const wordWrapToggle = document.querySelector('[data-toggle="word-wrap"]');
+  const lineNumbersToggle = document.querySelector('[data-toggle="line-numbers"]');
   const mermaidPreviewToggle = document.querySelector('[data-toggle="mermaid-preview"]');
   const outlineToggle = document.querySelector('[data-toggle="outline-view"]');
   const outlineLeftToggle = document.querySelector('[data-toggle="outline-left"]');
@@ -1425,11 +1589,15 @@ function updateMenuChecks() {
   if (spellcheckToggle) spellcheckToggle.classList.toggle('checked', spellcheckEnabled);
   if (dictionaryUsToggle) dictionaryUsToggle.classList.toggle('checked', dictionaryLanguage === 'en-US');
   if (dictionaryGbToggle) dictionaryGbToggle.classList.toggle('checked', dictionaryLanguage === 'en-GB');
-  if (darkModeToggle) darkModeToggle.classList.toggle('checked', darkMode);
-  if (darkModeSyncToggle) darkModeSyncToggle.classList.toggle('checked', darkModeSyncSystem);
-  if (darkModeToggle) darkModeToggle.disabled = darkModeSyncSystem;
+  if (darkModeLightToggle) darkModeLightToggle.classList.toggle('checked', darkModeMode === 'light');
+  if (darkModeDarkToggle) darkModeDarkToggle.classList.toggle('checked', darkModeMode === 'dark');
+  if (darkModeAutoToggle) darkModeAutoToggle.classList.toggle('checked', darkModeMode === 'auto');
+  for (const button of ribbonThemeModeButtons) {
+    button.classList.toggle('checked', button.dataset.themeMode === darkModeMode);
+  }
   if (syncViewsToggle) syncViewsToggle.classList.toggle('checked', syncViewsEnabled);
   if (wordWrapToggle) wordWrapToggle.classList.toggle('checked', wordWrapEnabled);
+  if (lineNumbersToggle) lineNumbersToggle.classList.toggle('checked', lineNumbersEnabled);
   if (mermaidPreviewToggle) mermaidPreviewToggle.classList.toggle('checked', mermaidPreviewEnabled);
   if (outlineToggle) outlineToggle.classList.toggle('checked', outlineVisible);
   if (outlineLeftToggle) outlineLeftToggle.classList.toggle('checked', outlinePosition === 'left');
@@ -1463,6 +1631,7 @@ function notifyNativeMenuState() {
     showRaw,
     showFormatted,
     darkMode,
+    darkModeMode,
     darkModeSyncSystem,
     ribbonMode,
     splitOrientation,
@@ -1472,6 +1641,7 @@ function notifyNativeMenuState() {
     themeDebugVisible,
     syncViewsEnabled,
     wordWrapEnabled,
+    lineNumbersEnabled,
     mermaidPreviewEnabled,
     outlineVisible,
     outlinePosition,
@@ -1556,6 +1726,7 @@ function applyRawSnapshot(snapshot) {
   isApplyingRawHistory = true;
   suppressRawHandler = true;
   rawEditor.value = snapshot.text;
+  updateLineNumbers({ force: true });
   rawEditor.setSelectionRange(snapshot.selectionStart, snapshot.selectionEnd);
   rawEditor.focus({ preventScroll: true });
   suppressRawHandler = false;
@@ -1581,6 +1752,7 @@ function redoRaw() {
 
 function applyRawZoom() {
   rawEditor.style.fontSize = `${14 * rawZoom}px`;
+  updateLineNumbers({ force: true });
 }
 
 function applyFormattedZoom() {
@@ -1642,11 +1814,18 @@ async function setDictionaryLanguage(language) {
   }
 }
 
+function normalizeDarkModeMode(mode) {
+  if (mode === 'dark' || mode === 'auto') return mode;
+  return 'light';
+}
+
 function setDarkMode(enabled, options = {}) {
   const persist = options.persist !== false;
   darkMode = enabled;
   body.classList.toggle('dark-content', darkMode);
-  if (ribbonDarkToggle) ribbonDarkToggle.checked = darkMode;
+  for (const button of ribbonThemeModeButtons) {
+    button.classList.toggle('checked', button.dataset.themeMode === darkModeMode);
+  }
   applyFrameTheme();
   if (syntaxReady) {
     lastRenderedHtml = '';
@@ -1661,8 +1840,9 @@ function setDarkMode(enabled, options = {}) {
 
 async function loadDarkModePreference() {
   const result = await window.nativeApi.loadDarkModePreference();
-  if (!result?.loaded) return false;
-  return Boolean(result.enabled);
+  if (!result?.loaded) return 'light';
+  if (result.mode === 'light' || result.mode === 'dark' || result.mode === 'auto') return result.mode;
+  return result.enabled ? 'dark' : 'light';
 }
 
 async function loadDarkModeSyncPreference() {
@@ -1680,6 +1860,7 @@ function setDarkModeSyncSystem(enabled, options = {}) {
   const persist = options.persist !== false;
   const applySystem = options.applySystem !== false;
   darkModeSyncSystem = enabled === true;
+  darkModeMode = darkModeSyncSystem ? 'auto' : (darkMode ? 'dark' : 'light');
   updateMenuChecks();
   if (persist) {
     void window.nativeApi.saveDarkModeSyncPreference({ enabled: darkModeSyncSystem });
@@ -1691,6 +1872,31 @@ function setDarkModeSyncSystem(enabled, options = {}) {
       setDarkMode(systemDark, { persist: false });
     })();
   }
+}
+
+async function setDarkModeMode(mode, options = {}) {
+  const persist = options.persist !== false;
+  darkModeMode = normalizeDarkModeMode(mode);
+  darkModeSyncSystem = darkModeMode === 'auto';
+  updateMenuChecks();
+  notifyNativeMenuState();
+
+  if (persist) {
+    void window.nativeApi.saveDarkModePreference({
+      mode: darkModeMode,
+      enabled: darkModeMode === 'dark'
+    });
+  }
+
+  if (darkModeMode === 'auto') {
+    const systemDark = await loadSystemDarkMode();
+    if (darkModeMode === 'auto') {
+      setDarkMode(systemDark, { persist: false });
+    }
+    return;
+  }
+
+  setDarkMode(darkModeMode === 'dark', { persist: false });
 }
 
 async function loadRibbonModePreference() {
@@ -1764,11 +1970,32 @@ function setWordWrapEnabled(enabled, options = {}) {
   const persist = options.persist !== false;
   wordWrapEnabled = enabled === true;
   rawEditor.wrap = wordWrapEnabled ? 'soft' : 'off';
+  updateLineNumbers({ force: true });
   if (persist) {
     void window.nativeApi.saveWordWrapPreference({ enabled: wordWrapEnabled });
   }
   updateMenuChecks();
   notifyNativeMenuState();
+}
+
+function setLineNumbersEnabled(enabled, options = {}) {
+  const persist = options.persist !== false;
+  lineNumbersEnabled = enabled === true;
+  if (rawEditorShell) {
+    rawEditorShell.classList.toggle('line-numbers-visible', lineNumbersEnabled);
+  }
+  if (lineNumbersEnabled) updateLineNumbers({ force: true });
+  if (persist) {
+    void window.nativeApi.saveLineNumbersPreference({ enabled: lineNumbersEnabled });
+  }
+  updateMenuChecks();
+  notifyNativeMenuState();
+}
+
+async function loadLineNumbersPreference() {
+  const result = await window.nativeApi.loadLineNumbersPreference();
+  if (!result?.loaded) return false;
+  return result.enabled === true;
 }
 
 function setMermaidPreviewEnabled(enabled, options = {}) {
@@ -1809,8 +2036,27 @@ function applyFrameTheme() {
   invalidatePreviewAnchorCache();
 }
 
+function ensurePreviewChromeCss(doc) {
+  if (!doc) return;
+  let previewChromeCss = doc.getElementById('preview-chrome-css');
+  if (!previewChromeCss) {
+    const head = doc.head || doc.getElementsByTagName('head')[0];
+    if (!head) return;
+    previewChromeCss = doc.createElement('style');
+    previewChromeCss.id = 'preview-chrome-css';
+    head.appendChild(previewChromeCss);
+  }
+  previewChromeCss.textContent = `
+    body {
+      box-sizing: border-box !important;
+      padding: 28px 28px 32px 28px !important;
+    }
+  `;
+}
+
 function ensureFrameDocument() {
   if (frame.contentDocument?.readyState === 'complete') {
+    ensurePreviewChromeCss(frame.contentDocument);
     return;
   }
 
@@ -1820,6 +2066,9 @@ function ensureFrameDocument() {
     <meta charset="utf-8" />
     <style>
       html, body { margin: 0; padding: 0; }
+      body {
+        box-sizing: border-box;
+      }
       body.use-default-theme {
         min-height: 100vh;
         padding: 20px;
@@ -1897,6 +2146,12 @@ function ensureFrameDocument() {
       body.theme-dark .mermaid-block > .mermaid-render .mermaid-error { color: #ffb1b1; background: #3a2222; border-color: #5d3434; }
     </style>
     <style id="user-css"></style>
+    <style id="preview-chrome-css">
+      body {
+        box-sizing: border-box !important;
+        padding: 28px 28px 32px 28px !important;
+      }
+    </style>
   </head>
   <body class="use-default-theme" contenteditable="true" spellcheck="true" lang="en-US"></body>
 </html>`;
@@ -2018,6 +2273,7 @@ function updateThemeDebug() {
 async function updateFrameCss() {
   const doc = frame.contentDocument;
   if (!doc) return;
+  ensurePreviewChromeCss(doc);
   let userCss = doc.getElementById('user-css');
   let darkFallbackCss = doc.getElementById('dark-fallback-css');
   if (!userCss) {
@@ -2320,6 +2576,7 @@ function renderFromMarkdown(source) {
     if (!suppressRawHandler && document.activeElement !== rawEditor) {
       suppressRawHandler = true;
       rawEditor.value = markdownState;
+      updateLineNumbers({ force: true });
       suppressRawHandler = false;
       syncRawSnapshot();
     }
@@ -2374,7 +2631,6 @@ function getPreviewLineAnchors() {
 }
 
 function shouldUseRatioScrollSync(anchors) {
-  if (wordWrapEnabled) return true;
   if (!Array.isArray(anchors) || anchors.length < 2) return true;
   const uniqueLines = new Set(anchors.map((anchor) => anchor.line)).size;
   return uniqueLines < (anchors.length * 0.65);
@@ -2399,12 +2655,9 @@ function syncPreviewScrollWithRaw() {
     const previewMax = Math.max(0, scrollEl.scrollHeight - scrollEl.clientHeight);
     nextPreviewTop = Math.round(previewMax * rawRatio);
   } else {
-    const computedRaw = window.getComputedStyle(rawEditor);
-    const rawLineHeight = Number.parseFloat(computedRaw.lineHeight);
-    const usableLineHeight = Number.isFinite(rawLineHeight) && rawLineHeight > 0 ? rawLineHeight : 20;
-
     if (anchors.length > 0) {
-      const rawVisibleLine = Math.max(0, Math.floor(rawEditor.scrollTop / usableLineHeight));
+      const rawPosition = rawLinePositionFromScrollTop(rawEditor.scrollTop);
+      const rawVisibleLine = rawPosition.line;
       let anchorIndex = 0;
       for (let i = 0; i < anchors.length; i += 1) {
         if (anchors[i].line <= rawVisibleLine) anchorIndex = i;
@@ -2421,9 +2674,7 @@ function syncPreviewScrollWithRaw() {
         ? next.top
         : Math.max(activeTop + 1, scrollEl.scrollHeight - scrollEl.clientHeight);
       const blockHeight = Math.max(1, nextTop - activeTop);
-      const intraLinePx = rawEditor.scrollTop - (rawVisibleLine * usableLineHeight);
-      const intraLineRatio = Math.max(0, Math.min(1, intraLinePx / usableLineHeight));
-      const combinedProgress = Math.max(0, Math.min(1, lineProgress + ((1 / Math.max(1, endLine - startLine)) * intraLineRatio)));
+      const combinedProgress = Math.max(0, Math.min(1, lineProgress + ((1 / Math.max(1, endLine - startLine)) * rawPosition.progress)));
       nextPreviewTop = Math.round(activeTop + (blockHeight * combinedProgress));
     }
   }
@@ -2458,10 +2709,6 @@ function syncRawScrollWithPreview() {
     const rawMax = Math.max(0, rawEditor.scrollHeight - rawEditor.clientHeight);
     nextRawTop = Math.round(rawMax * previewRatio);
   } else {
-    const computedRaw = window.getComputedStyle(rawEditor);
-    const rawLineHeight = Number.parseFloat(computedRaw.lineHeight);
-    const usableLineHeight = Number.isFinite(rawLineHeight) && rawLineHeight > 0 ? rawLineHeight : 20;
-
     if (anchors.length > 0) {
       const previewTop = scrollEl.scrollTop;
       let anchorIndex = 0;
@@ -2483,7 +2730,8 @@ function syncRawScrollWithPreview() {
       const startLine = active.line;
       const endLine = Math.max(startLine + 1, next.line || (startLine + 1));
       const mappedLine = startLine + ((endLine - startLine) * blockProgress);
-      nextRawTop = Math.round(mappedLine * usableLineHeight);
+      const rawLine = Math.floor(mappedLine);
+      nextRawTop = rawScrollTopForLinePosition(rawLine, mappedLine - rawLine);
     }
   }
 
@@ -2546,14 +2794,8 @@ function syncRawToPreviewCursor() {
   const lineNode = element?.closest?.('[data-line]');
   if (!lineNode) return;
   const line = Number(lineNode.getAttribute('data-line') || 0);
-  const text = rawEditor.value || '';
-  const lines = text.split('\n');
-  let offset = 0;
-  for (let i = 0; i < Math.min(line, lines.length); i += 1) {
-    offset += lines[i].length + 1;
-  }
-  const ratio = offset / Math.max(1, text.length);
-  rawEditor.scrollTop = rawEditor.scrollHeight * ratio;
+  rawEditor.scrollTop = rawScrollTopForLinePosition(line, 0);
+  updateLineNumberScroll();
 }
 
 function schedulePreviewScrollSync() {
@@ -2584,6 +2826,7 @@ function handleRawEdit() {
     rawRedoStack.length = 0;
   }
   renderFromMarkdown(rawEditor.value);
+  updateLineNumbers();
   syncPreviewToRawCursor();
   lastFindOptionsKey = '';
   activeFindMatchIndex = -1;
@@ -2611,6 +2854,7 @@ function handleFormattedEdit() {
   if (rawEditor.value !== markdownState) {
     suppressRawHandler = true;
     rawEditor.value = markdownState;
+    updateLineNumbers({ force: true });
     suppressRawHandler = false;
     syncRawSnapshot();
   }
@@ -2667,6 +2911,7 @@ function replaceSelectionInRaw(transform) {
 
   suppressRawHandler = true;
   rawEditor.value = result.text;
+  updateLineNumbers({ force: true });
   rawEditor.setSelectionRange(result.selectionStart, result.selectionEnd);
   rawEditor.focus({ preventScroll: true });
   suppressRawHandler = false;
@@ -2933,6 +3178,7 @@ function runEditCommand(action) {
 function setMarkdownProgrammatically(nextMarkdown, selectionStart = null, selectionEnd = null) {
   suppressRawHandler = true;
   rawEditor.value = nextMarkdown;
+  updateLineNumbers({ force: true });
   if (typeof selectionStart === 'number' && typeof selectionEnd === 'number') {
     rawEditor.setSelectionRange(selectionStart, selectionEnd);
   }
@@ -3352,6 +3598,7 @@ function applyLoadedDocument(loaded) {
   markdownState = loaded.content;
   lastSavedAt = loaded.lastSavedAt || null;
   rawEditor.value = markdownState;
+  updateLineNumbers({ force: true });
 
   renderFromMarkdown(markdownState);
   savedBaseline = markdownState;
@@ -3417,6 +3664,7 @@ async function createNewDocument(options = {}) {
   markdownState = initialContent;
   lastSavedAt = null;
   rawEditor.value = markdownState;
+  updateLineNumbers({ force: true });
   renderFromMarkdown(markdownState);
   savedBaseline = markDirty ? '' : markdownState;
   rawUndoStack.length = 0;
@@ -3955,6 +4203,12 @@ async function handleAction(action, payload = {}) {
     case 'set-word-wrap':
       setWordWrapEnabled(Boolean(payload.enabled));
       break;
+    case 'toggle-line-numbers':
+      setLineNumbersEnabled(!lineNumbersEnabled);
+      break;
+    case 'set-line-numbers':
+      setLineNumbersEnabled(Boolean(payload.enabled));
+      break;
     case 'toggle-mermaid-preview':
       setMermaidPreviewEnabled(!mermaidPreviewEnabled);
       break;
@@ -3979,25 +4233,22 @@ async function handleAction(action, payload = {}) {
       }
       break;
     case 'toggle-dark-mode':
-      if (darkModeSyncSystem) {
-        setDarkModeSyncSystem(false);
-      }
-      setDarkMode(!darkMode);
+      await setDarkModeMode(darkModeMode === 'light' ? 'dark' : darkModeMode === 'dark' ? 'auto' : 'light');
       break;
     case 'set-dark-mode':
-      if (darkModeSyncSystem) {
-        setDarkModeSyncSystem(false);
-      }
-      setDarkMode(Boolean(payload.enabled));
+      await setDarkModeMode(payload.enabled ? 'dark' : 'light');
+      break;
+    case 'set-dark-mode-mode':
+      await setDarkModeMode(payload.mode);
       break;
     case 'toggle-dark-mode-sync':
-      setDarkModeSyncSystem(!darkModeSyncSystem);
+      await setDarkModeMode(darkModeMode === 'auto' ? (darkMode ? 'dark' : 'light') : 'auto');
       break;
     case 'set-dark-mode-sync':
-      setDarkModeSyncSystem(Boolean(payload.enabled));
+      await setDarkModeMode(payload.enabled ? 'auto' : (darkMode ? 'dark' : 'light'));
       break;
     case 'system-dark-mode-changed':
-      if (darkModeSyncSystem) {
+      if (darkModeMode === 'auto') {
         setDarkMode(Boolean(payload.enabled), { persist: false });
       }
       break;
@@ -4047,6 +4298,7 @@ function wireMenus() {
       if (action) {
         const payload = {};
         if (button.dataset.preset) payload.preset = button.dataset.preset;
+        if (button.dataset.mode) payload.mode = button.dataset.mode;
         void handleAction(action, payload);
       }
     });
@@ -4189,7 +4441,14 @@ function wireKeyboardShortcuts() {
 function wireEvents() {
   window.addEventListener('resize', () => {
     invalidatePreviewAnchorCache();
+    updateLineNumbers({ force: true });
   });
+  if (typeof ResizeObserver !== 'undefined') {
+    const rawEditorResizeObserver = new ResizeObserver(() => {
+      updateLineNumbers({ force: true });
+    });
+    rawEditorResizeObserver.observe(rawEditor);
+  }
 
   rawEditor.addEventListener('input', handleRawEdit);
   rawEditor.addEventListener('keyup', () => {
@@ -4201,6 +4460,7 @@ function wireEvents() {
     publishSessionState();
   });
   rawEditor.addEventListener('scroll', () => {
+    updateLineNumberScroll();
     if (activeScrollSyncSource === 'preview') {
       publishSessionState();
       return;
@@ -4303,12 +4563,6 @@ function wireEvents() {
     void handleAction(action, payload);
   });
 
-  if (ribbonDarkToggle) {
-    ribbonDarkToggle.addEventListener('change', () => {
-      void handleAction('set-dark-mode', { enabled: ribbonDarkToggle.checked });
-    });
-  }
-
   if (findInput) {
     findInput.addEventListener('input', () => {
       refreshFindMatches(true);
@@ -4389,6 +4643,7 @@ function bootstrap() {
   diagnosticLog('renderer.wire-events.done');
 
   rawEditor.value = markdownState;
+  updateLineNumbers({ force: true });
   savedBaseline = markdownState;
   rawUndoStack.length = 0;
   rawRedoStack.length = 0;
@@ -4406,9 +4661,9 @@ function bootstrap() {
   setThemeDebugVisible(false);
   setSyncViewsEnabled(true, { persist: false });
   setWordWrapEnabled(false, { persist: false });
+  setLineNumbersEnabled(false, { persist: false });
   setMermaidPreviewEnabled(false, { persist: false });
-  setDarkModeSyncSystem(false, { persist: false, applySystem: false });
-  setDarkMode(false, { persist: false });
+  void setDarkModeMode('light', { persist: false });
   setDirty(false);
   updateWindowTitle();
   updateStatusBar();
@@ -4425,6 +4680,7 @@ function bootstrap() {
         const templateContent = applyTemplateTokens(defaultTemplate.content || '');
         markdownState = templateContent;
         rawEditor.value = templateContent;
+        updateLineNumbers({ force: true });
         renderFromMarkdown(templateContent);
         savedBaseline = templateContent;
         currentFilePath = null;
@@ -4444,17 +4700,13 @@ function bootstrap() {
       }
     }
 
-    const savedDarkModeSync = await loadDarkModeSyncPreference();
-    setDarkModeSyncSystem(savedDarkModeSync, { persist: false, applySystem: false });
-    const savedDarkMode = await loadDarkModePreference();
-    if (savedDarkModeSync) {
-      const systemDark = await loadSystemDarkMode();
-      setDarkMode(systemDark, { persist: false });
-      diagnosticLog('renderer.startup.dark-mode.loaded', { enabled: systemDark, source: 'system' });
-    } else {
-      setDarkMode(savedDarkMode, { persist: false });
-      diagnosticLog('renderer.startup.dark-mode.loaded', { enabled: savedDarkMode, source: 'saved' });
-    }
+    const savedDarkModeMode = await loadDarkModePreference();
+    await setDarkModeMode(savedDarkModeMode, { persist: false });
+    diagnosticLog('renderer.startup.dark-mode.loaded', {
+      enabled: darkMode,
+      mode: darkModeMode,
+      source: darkModeMode === 'auto' ? 'system' : 'saved'
+    });
 
     const savedRibbonMode = await loadRibbonModePreference();
     setRibbonMode(savedRibbonMode, { persist: false });
@@ -4467,6 +4719,10 @@ function bootstrap() {
     const savedWordWrap = await loadWordWrapPreference();
     setWordWrapEnabled(savedWordWrap, { persist: false });
     diagnosticLog('renderer.startup.word-wrap.loaded', { enabled: savedWordWrap });
+
+    const savedLineNumbers = await loadLineNumbersPreference();
+    setLineNumbersEnabled(savedLineNumbers, { persist: false });
+    diagnosticLog('renderer.startup.line-numbers.loaded', { enabled: savedLineNumbers });
 
     const savedMermaidPreview = await loadMermaidPreviewPreference();
     setMermaidPreviewEnabled(savedMermaidPreview, { persist: false });

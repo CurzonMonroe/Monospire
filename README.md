@@ -31,11 +31,11 @@ This creates the macOS app and DMG under `dist/`, then updates the Homebrew rele
 Expected outputs include:
 
 - `dist/mac-arm64/Monospire.app`
-- `dist/Monospire-1.2.2-arm64.dmg`
-- `dist/Monospire-1.2.2-arm64.dmg.blockmap`
+- `dist/Monospire-1.2.3-arm64.dmg`
+- `dist/Monospire-1.2.3-arm64.dmg.blockmap`
 - `dist/latest-mac.yml`
 - `homebrew/Casks/monospire.rb`
-- `homebrew/Casks/Monospire.dmg/Monospire-1.2.2-arm64.dmg`
+- `homebrew/Casks/Monospire.dmg/Monospire-1.2.3-arm64.dmg`
 
 If local Apple signing identities are ambiguous or unavailable, build with ad-hoc signing:
 

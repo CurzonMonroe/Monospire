@@ -1,7 +1,7 @@
 {
   "name": "monospire",
   "productName": "Monospire",
-  "version": "1.2.2",
+  "version": "1.2.3",
   "description": "Monospire: native-feeling macOS Markdown editor with ribbon and dual editing views.",
   "main": "main.js",
   "scripts": {
@@ -27,7 +27,7 @@
   "build": {
     "appId": "com.monospire.app",
     "productName": "Monospire",
-    "buildVersion": "1.2.2.0",
+    "buildVersion": "1.2.3.0",
     "asar": false,
     "files": [
       "main.js",
