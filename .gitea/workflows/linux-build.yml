@@ -54,7 +54,7 @@ jobs:
         run: find dist -maxdepth 1 -type f -print -exec shasum -a 256 {} \;
 
       - name: Upload Linux artifacts
-        uses: https://github.com/actions/upload-artifact@v4
+        uses: https://github.com/actions/upload-artifact@v3
         with:
           name: monospire-linux-${{ gitea.ref_name }}
           path: |
