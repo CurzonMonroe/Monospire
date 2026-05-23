@@ -23,6 +23,8 @@ Environment:
   GITHUB_RELEASE_TAG     Release tag. Defaults to v<package.json version>.
   GITHUB_RELEASE_ARTIFACT_DIR
                          Directory containing Linux artifacts. Defaults to dist.
+  GITHUB_RELEASE_REPLACE_EXISTING
+                         Replace existing assets when set to true. Defaults to false.
 USAGE
 }
 
@@ -45,16 +47,11 @@ while [[ $# -gt 0 ]]; do
 done
 
 ARTIFACTS=()
-while IFS= read -r artifact; do
-  ARTIFACTS+=("${artifact}")
-done < <(
-  find "${ARTIFACT_DIR}" -maxdepth 1 -type f \( \
-    -name '*.AppImage' -o \
-    -name '*.deb' -o \
-    -name '*.rpm' -o \
-    -name '*.tar.xz' \
-  \) | sort
-)
+for pattern in '*.deb' '*.rpm' '*.tar.xz' '*.AppImage'; do
+  while IFS= read -r artifact; do
+    ARTIFACTS+=("${artifact}")
+  done < <(find "${ARTIFACT_DIR}" -maxdepth 1 -type f -name "${pattern}" | sort)
+done
 
 if [[ "${#ARTIFACTS[@]}" -eq 0 ]]; then
   echo "No Linux artifacts found in ${ARTIFACT_DIR}" >&2
@@ -192,22 +189,11 @@ if (asset) process.stdout.write(String(asset.id));
 ' <<<"${current_assets}"
 }
 
-delete_asset_if_present() {
-  local asset_name="$1"
-  local asset_id
-
-  asset_id="$(asset_id_by_name "${asset_name}")"
-  if [[ -n "${asset_id}" ]]; then
-    echo "Replacing existing GitHub release asset ${asset_name}."
-    api_request DELETE "https://api.github.com/repos/${REPO}/releases/assets/${asset_id}" >/dev/null
-  fi
-}
-
 upload_asset() {
   local artifact="$1"
   local name="$2"
   local encoded_name="$3"
-  local attempt
+  local attempt existing_asset_id
 
   for attempt in 1 2 3; do
     if [[ "${attempt}" -gt 1 ]]; then
@@ -215,7 +201,16 @@ upload_asset() {
       sleep 10
     fi
 
-    delete_asset_if_present "${name}"
+    existing_asset_id="$(asset_id_by_name "${name}")"
+    if [[ -n "${existing_asset_id}" ]]; then
+      if [[ "${GITHUB_RELEASE_REPLACE_EXISTING:-false}" == "true" ]]; then
+        echo "Replacing existing GitHub release asset ${name}."
+        api_request DELETE "https://api.github.com/repos/${REPO}/releases/assets/${existing_asset_id}" >/dev/null
+      else
+        echo "Skipping existing GitHub release asset ${name}."
+        return 0
+      fi
+    fi
 
     if curl --fail-with-body --silent --show-error \
       --retry 2 \
