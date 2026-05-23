@@ -179,36 +179,70 @@ if [[ -z "${release_id}" ]]; then
   exit 1
 fi
 
-assets_json="$(api_request GET "https://api.github.com/repos/${REPO}/releases/${release_id}/assets?per_page=100")"
+asset_id_by_name() {
+  local asset_name="$1"
+  local current_assets
 
-for artifact in "${ARTIFACTS[@]}"; do
-  name="$(basename "${artifact}")"
-  encoded_name="$(node -e 'process.stdout.write(encodeURIComponent(process.argv[1]))' "${name}")"
-  existing_asset_id="$(
-    ASSET_NAME="${name}" node -e '
+  current_assets="$(api_request GET "https://api.github.com/repos/${REPO}/releases/${release_id}/assets?per_page=100")"
+  ASSET_NAME="${asset_name}" node -e '
 const fs = require("fs");
 const assets = JSON.parse(fs.readFileSync(0, "utf8"));
 const asset = assets.find((candidate) => candidate.name === process.env.ASSET_NAME);
 if (asset) process.stdout.write(String(asset.id));
-' <<<"${assets_json}"
-  )"
+' <<<"${current_assets}"
+}
 
-  if [[ -n "${existing_asset_id}" ]]; then
-    echo "Replacing existing GitHub release asset ${name}."
-    api_request DELETE "https://api.github.com/repos/${REPO}/releases/assets/${existing_asset_id}" >/dev/null
-  else
-    echo "Uploading GitHub release asset ${name}."
+delete_asset_if_present() {
+  local asset_name="$1"
+  local asset_id
+
+  asset_id="$(asset_id_by_name "${asset_name}")"
+  if [[ -n "${asset_id}" ]]; then
+    echo "Replacing existing GitHub release asset ${asset_name}."
+    api_request DELETE "https://api.github.com/repos/${REPO}/releases/assets/${asset_id}" >/dev/null
   fi
+}
 
-  curl --fail-with-body --silent --show-error \
-    -X POST \
-    -H "Accept: application/vnd.github+json" \
-    -H "Authorization: Bearer ${TOKEN}" \
-    -H "X-GitHub-Api-Version: 2022-11-28" \
-    -H "Content-Type: application/octet-stream" \
-    --data-binary @"${artifact}" \
-    "https://uploads.github.com/repos/${REPO}/releases/${release_id}/assets?name=${encoded_name}" \
-    >/dev/null
+upload_asset() {
+  local artifact="$1"
+  local name="$2"
+  local encoded_name="$3"
+  local attempt
+
+  for attempt in 1 2 3; do
+    if [[ "${attempt}" -gt 1 ]]; then
+      echo "Retrying GitHub release asset ${name} upload, attempt ${attempt}."
+      sleep 10
+    fi
+
+    delete_asset_if_present "${name}"
+
+    if curl --fail-with-body --silent --show-error \
+      --retry 2 \
+      --retry-delay 5 \
+      --retry-all-errors \
+      --connect-timeout 30 \
+      -X POST \
+      -H "Accept: application/vnd.github+json" \
+      -H "Authorization: Bearer ${TOKEN}" \
+      -H "X-GitHub-Api-Version: 2022-11-28" \
+      -H "Content-Type: application/octet-stream" \
+      --data-binary @"${artifact}" \
+      "https://uploads.github.com/repos/${REPO}/releases/${release_id}/assets?name=${encoded_name}" \
+      >/dev/null; then
+      return 0
+    fi
+  done
+
+  echo "Failed to upload GitHub release asset ${name} after 3 attempts." >&2
+  return 1
+}
+
+for artifact in "${ARTIFACTS[@]}"; do
+  name="$(basename "${artifact}")"
+  encoded_name="$(node -e 'process.stdout.write(encodeURIComponent(process.argv[1]))' "${name}")"
+  echo "Uploading GitHub release asset ${name}."
+  upload_asset "${artifact}" "${name}" "${encoded_name}"
 done
 
 echo "Uploaded ${#ARTIFACTS[@]} Linux artifact(s) to https://github.com/${REPO}/releases/tag/${TAG_NAME}"
