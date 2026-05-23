@@ -1,6 +1,6 @@
 # Monospire
 
-Monospire is a macOS Markdown editor built with Electron. It provides raw and formatted editing views, bundled preview themes, syntax-highlighted code blocks, Mermaid rendering, document export, and native-feeling macOS menus.
+Monospire is a focused Markdown editor built with Electron. It provides raw and formatted editing views, bundled preview themes, syntax-highlighted code blocks, Mermaid rendering, document export, and native-feeling menus.
 
 ## Installation
 

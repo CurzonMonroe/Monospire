@@ -93,7 +93,7 @@ cask "monospire" do
 
   url "${DMG_URL}"
   name "Monospire"
-  desc "Native-feeling macOS Markdown editor with dual editing views"
+  desc "A focused Markdown editor"
   homepage "${HOMEPAGE_URL}"
 
   depends_on macos: ">= :ventura"

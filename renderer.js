@@ -545,6 +545,19 @@ const frame = document.getElementById('formatted-frame');
 const titlebarText = document.getElementById('titlebar-text');
 const themeDebug = document.getElementById('theme-debug');
 const ribbonThemeModeButtons = [...document.querySelectorAll('[data-theme-mode]')];
+const editorFontMenu = document.getElementById('editor-font-menu');
+const editorFontCurrent = document.getElementById('editor-font-current');
+const settingsModal = document.getElementById('settings-modal');
+const settingsRibbonMode = document.getElementById('settings-ribbon-mode');
+const settingsThemeMode = document.getElementById('settings-theme-mode');
+const settingsEmbeddedMenu = document.getElementById('settings-embedded-menu');
+const settingsEditorFont = document.getElementById('settings-editor-font');
+const settingsWordWrap = document.getElementById('settings-word-wrap');
+const settingsLineNumbers = document.getElementById('settings-line-numbers');
+const settingsSpellcheck = document.getElementById('settings-spellcheck');
+const settingsDictionaryLanguage = document.getElementById('settings-dictionary-language');
+const settingsMermaidPreview = document.getElementById('settings-mermaid-preview');
+const settingsThemeDebug = document.getElementById('settings-theme-debug');
 const recentFilesMenu = document.getElementById('recent-files-menu');
 const tocPane = document.getElementById('toc-pane');
 const tocList = document.getElementById('toc-list');
@@ -563,8 +576,8 @@ const findReplaceStatus = document.getElementById('find-replace-status');
 const linkCheckModal = document.getElementById('link-check-modal');
 const linkCheckSummary = document.getElementById('link-check-summary');
 const linkCheckList = document.getElementById('link-check-list');
-const keybindingsModal = document.getElementById('keybindings-modal');
 const keybindingsList = document.getElementById('keybindings-list');
+const settingsKeyboardShortcuts = document.getElementById('settings-keyboard-shortcuts');
 const versionHistoryModal = document.getElementById('version-history-modal');
 const versionHistoryList = document.getElementById('version-history-list');
 const statusLastSaved = document.getElementById('status-last-saved');
@@ -574,7 +587,7 @@ const statusCharCount = document.getElementById('status-char-count');
 const statusImageCount = document.getElementById('status-image-count');
 
 let markdownState = '';
-let lastRenderedHtml = '';
+let lastRenderedHtml = null;
 let userCssPath = null;
 let userCssText = '';
 let themeLightPath = null;
@@ -606,6 +619,8 @@ let themeDebugVisible = false;
 let syncViewsEnabled = true;
 let wordWrapEnabled = false;
 let lineNumbersEnabled = false;
+let editorFontFamily = '';
+let editorFontFamilies = [];
 let mermaidPreviewEnabled = false;
 let outlineVisible = true;
 let outlinePosition = 'right';
@@ -670,9 +685,59 @@ const DEFAULT_KEYBINDINGS = {
   'zoom-raw-in': 'CmdOrCtrl+=',
   'zoom-raw-out': 'CmdOrCtrl+-',
   'zoom-raw-reset': 'CmdOrCtrl+0',
+  'edit-front-matter': 'CmdOrCtrl+M',
+  'open-settings': 'CmdOrCtrl+,',
   'toggle-theme-debug': 'CmdOrCtrl+Shift+D'
 };
 let keybindings = { ...DEFAULT_KEYBINDINGS };
+const IS_MAC = /\bMac|iPhone|iPad|iPod\b/i.test(navigator.platform || '');
+const KEYBINDING_GROUPS = [
+  {
+    title: 'File',
+    actions: [
+      ['file-new', 'New Document'],
+      ['file-new-window', 'New Window'],
+      ['file-new-from-template', 'New from Template'],
+      ['file-load', 'Open'],
+      ['file-save', 'Save'],
+      ['file-save-as', 'Export'],
+      ['app-exit', 'Exit']
+    ]
+  },
+  {
+    title: 'Edit',
+    actions: [
+      ['edit-find', 'Find'],
+      ['edit-replace', 'Replace'],
+      ['find-next', 'Find Next'],
+      ['open-command-palette', 'Command Palette']
+    ]
+  },
+  {
+    title: 'Format',
+    actions: [
+      ['format-bold', 'Bold'],
+      ['format-italic', 'Italic'],
+      ['format-inline-code', 'Inline Code']
+    ]
+  },
+  {
+    title: 'Zoom',
+    actions: [
+      ['zoom-raw-in', 'Editor Zoom In'],
+      ['zoom-raw-out', 'Editor Zoom Out'],
+      ['zoom-raw-reset', 'Reset Editor Zoom']
+    ]
+  },
+  {
+    title: 'Tools',
+    actions: [
+      ['edit-front-matter', 'Document Metadata'],
+      ['open-settings', 'Settings'],
+      ['toggle-theme-debug', 'Theme Debug']
+    ]
+  }
+];
 
 const menuTriggers = [...document.querySelectorAll('.menu-trigger')];
 const menuGroups = [...document.querySelectorAll('.menu-group')];
@@ -703,6 +768,19 @@ function normalizeKeyComboString(input) {
   if (mods.has('Shift')) ordered.push('Shift');
   if (key) ordered.push(key);
   return ordered.join('+');
+}
+
+function formatKeyComboForPlatform(combo) {
+  return String(combo || '')
+    .split('+')
+    .map((part) => {
+      const token = part.trim();
+      if (token === 'CmdOrCtrl') return IS_MAC ? 'Cmd' : 'Ctrl';
+      if (token === 'Alt') return IS_MAC ? 'Option' : 'Alt';
+      return token;
+    })
+    .filter(Boolean)
+    .join('+');
 }
 
 function comboFromKeyboardEvent(event) {
@@ -837,10 +915,12 @@ function measureWrappedRawLineHeights(lines) {
 }
 
 function rawLineMetricSignature() {
+  const style = window.getComputedStyle(rawEditor);
   return [
     wordWrapEnabled ? 'wrap' : 'nowrap',
     rawEditor.clientWidth,
     rawEditor.style.fontSize || '',
+    style.fontFamily || '',
     rawEditor.value
   ].join(':');
 }
@@ -943,19 +1023,197 @@ async function saveKeybindingsPreference() {
   await window.nativeApi.saveKeybindingsPreference({ keybindings });
 }
 
+function cssFontFamilyValue(family) {
+  const name = String(family || '').trim();
+  if (!name) return '';
+  return `"${name.replace(/\\/g, '\\\\').replace(/"/g, '\\"')}", ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace`;
+}
+
+function cssQuotedFontFamily(family) {
+  return `"${String(family || '').trim().replace(/\\/g, '\\\\').replace(/"/g, '\\"')}"`;
+}
+
+function measureFontSample(context, fontStack) {
+  context.font = `16px ${fontStack}`;
+  return {
+    narrow: context.measureText('iiiiiiiiii').width,
+    wide: context.measureText('WWWWWWWWWW').width,
+    mixed: context.measureText('ilMW01{}[]').width,
+    repeated: context.measureText('mmmmmmmmmm').width
+  };
+}
+
+function isMonospaceMeasurement(metrics) {
+  return Math.abs(metrics.narrow - metrics.wide) < 0.5 && Math.abs(metrics.mixed - metrics.repeated) < 0.5;
+}
+
+function isLikelyMonospaceFont(family) {
+  const name = String(family || '').trim();
+  if (!name) return false;
+  const canvas = isLikelyMonospaceFont.canvas || (isLikelyMonospaceFont.canvas = document.createElement('canvas'));
+  const context = canvas.getContext('2d');
+  if (!context) return false;
+
+  const quoted = cssQuotedFontFamily(name);
+  const serifFallback = measureFontSample(context, `${quoted}, serif`);
+  const sansFallback = measureFontSample(context, `${quoted}, sans-serif`);
+
+  if (!isMonospaceMeasurement(serifFallback) || !isMonospaceMeasurement(sansFallback)) {
+    return false;
+  }
+
+  return (
+    Math.abs(serifFallback.narrow - sansFallback.narrow) < 0.5 &&
+    Math.abs(serifFallback.wide - sansFallback.wide) < 0.5 &&
+    Math.abs(serifFallback.mixed - sansFallback.mixed) < 0.5
+  );
+}
+
+function setEditorFontFamily(family, options = {}) {
+  const persist = options.persist !== false;
+  editorFontFamily = String(family || '').trim();
+  document.documentElement.style.setProperty(
+    '--editor-font-family',
+    editorFontFamily
+      ? cssFontFamilyValue(editorFontFamily)
+      : 'ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace'
+  );
+  if (editorFontCurrent) {
+    editorFontCurrent.textContent = `${editorFontFamily || 'System Mono'} ›`;
+  }
+  if (editorFontMenu) {
+    for (const button of editorFontMenu.querySelectorAll('[data-editor-font-family]')) {
+      button.classList.toggle('checked', button.dataset.editorFontFamily === editorFontFamily);
+    }
+  }
+  if (settingsEditorFont) {
+    settingsEditorFont.value = editorFontFamily;
+  }
+  lastRawLineMetrics = null;
+  updateLineNumbers({ force: true });
+  if (persist) {
+    void window.nativeApi.saveEditorFontPreference({ family: editorFontFamily });
+  }
+  notifyNativeMenuState();
+}
+
+async function populateEditorFontMenu() {
+  if (!editorFontMenu && !settingsEditorFont) return;
+  let families = [];
+  try {
+    const result = await window.nativeApi.listInstalledFontFamilies();
+    families = Array.isArray(result?.families) ? result.families : [];
+  } catch (error) {
+    diagnosticLog('renderer.editor-fonts.list.error', { error: String(error?.message || error) });
+  }
+
+  const monospaceFamilies = families
+    .filter(isLikelyMonospaceFont)
+    .sort((a, b) => a.localeCompare(b, undefined, { sensitivity: 'base' }));
+  editorFontFamilies = monospaceFamilies;
+  const allFamilies = [''].concat(monospaceFamilies);
+  if (editorFontFamily && !allFamilies.includes(editorFontFamily)) {
+    allFamilies.push(editorFontFamily);
+  }
+
+  if (settingsEditorFont) {
+    settingsEditorFont.replaceChildren();
+    for (const family of allFamilies) {
+      const option = document.createElement('option');
+      option.value = family;
+      option.textContent = family || 'System Mono';
+      settingsEditorFont.appendChild(option);
+    }
+    settingsEditorFont.value = editorFontFamily;
+  }
+
+  if (editorFontMenu) {
+    editorFontMenu.replaceChildren();
+    for (const family of allFamilies) {
+      const button = document.createElement('button');
+      button.type = 'button';
+      button.dataset.editorFontFamily = family;
+      button.textContent = family || 'System Mono';
+      button.classList.toggle('checked', family === editorFontFamily);
+      editorFontMenu.appendChild(button);
+    }
+  }
+  notifyNativeMenuState();
+}
+
+async function loadEditorFontPreference() {
+  try {
+    const result = await window.nativeApi.loadEditorFontPreference();
+    return result?.loaded ? String(result.family || '') : '';
+  } catch (error) {
+    diagnosticLog('renderer.editor-font.load.error', { error: String(error?.message || error) });
+    return '';
+  }
+}
+
 function renderKeybindingsEditor() {
   if (!keybindingsList) return;
   keybindingsList.innerHTML = '';
-  const entries = Object.entries(DEFAULT_KEYBINDINGS);
-  for (const [action, defaultCombo] of entries) {
+  const rendered = new Set();
+
+  for (const group of KEYBINDING_GROUPS) {
+    const section = document.createElement('section');
+    section.className = 'keybinding-section';
+    const heading = document.createElement('h2');
+    heading.textContent = group.title;
+    section.appendChild(heading);
+
+    for (const [action, labelText] of group.actions) {
+      const defaultCombo = DEFAULT_KEYBINDINGS[action];
+      if (!defaultCombo) continue;
+      rendered.add(action);
+      const row = document.createElement('div');
+      row.className = 'keybinding-row';
+
+      const label = document.createElement('label');
+      label.setAttribute('for', `keybinding-${action}`);
+      const labelMain = document.createElement('span');
+      labelMain.className = 'keybinding-label-main';
+      labelMain.textContent = labelText;
+      const labelDefault = document.createElement('span');
+      labelDefault.className = 'keybinding-label-default';
+      labelDefault.textContent = `Default ${formatKeyComboForPlatform(defaultCombo)}`;
+      label.appendChild(labelMain);
+      label.appendChild(labelDefault);
+
+      const input = document.createElement('input');
+      input.type = 'text';
+      input.id = `keybinding-${action}`;
+      input.dataset.action = action;
+      input.value = formatKeyComboForPlatform(keybindings[action] || defaultCombo);
+
+      row.appendChild(label);
+      row.appendChild(input);
+      section.appendChild(row);
+    }
+
+    keybindingsList.appendChild(section);
+  }
+
+  for (const [action, defaultCombo] of Object.entries(DEFAULT_KEYBINDINGS)) {
+    if (rendered.has(action)) continue;
     const row = document.createElement('div');
     row.className = 'keybinding-row';
     const label = document.createElement('label');
-    label.textContent = `${action} (${defaultCombo})`;
+    label.setAttribute('for', `keybinding-${action}`);
+    const labelMain = document.createElement('span');
+    labelMain.className = 'keybinding-label-main';
+    labelMain.textContent = action;
+    const labelDefault = document.createElement('span');
+    labelDefault.className = 'keybinding-label-default';
+    labelDefault.textContent = `Default ${formatKeyComboForPlatform(defaultCombo)}`;
+    label.appendChild(labelMain);
+    label.appendChild(labelDefault);
     const input = document.createElement('input');
     input.type = 'text';
+    input.id = `keybinding-${action}`;
     input.dataset.action = action;
-    input.value = keybindings[action] || defaultCombo;
+    input.value = formatKeyComboForPlatform(keybindings[action] || defaultCombo);
     row.appendChild(label);
     row.appendChild(input);
     keybindingsList.appendChild(row);
@@ -963,14 +1221,13 @@ function renderKeybindingsEditor() {
 }
 
 function openKeybindingsModal() {
-  if (!keybindingsModal) return;
+  openSettings();
   renderKeybindingsEditor();
-  keybindingsModal.classList.remove('hidden');
+  settingsKeyboardShortcuts?.scrollIntoView({ block: 'start' });
 }
 
 function closeKeybindingsModal() {
-  if (!keybindingsModal) return;
-  keybindingsModal.classList.add('hidden');
+  closeSettings();
 }
 
 async function saveKeybindingsFromEditor() {
@@ -985,7 +1242,7 @@ async function saveKeybindingsFromEditor() {
   }
   keybindings = next;
   await saveKeybindingsPreference();
-  closeKeybindingsModal();
+  renderKeybindingsEditor();
 }
 
 async function resetKeybindingsToDefault() {
@@ -1339,11 +1596,10 @@ function renderOutlineList() {
   if (!tocList) return;
   tocList.innerHTML = '';
   if (outlineItems.length === 0) {
-    const empty = document.createElement('button');
-    empty.type = 'button';
+    const empty = document.createElement('div');
     empty.className = 'toc-item';
-    empty.disabled = true;
-    empty.textContent = 'No headings';
+    empty.classList.add('toc-empty');
+    empty.innerHTML = '<strong>Headings appear here</strong><span>Add # or ## headings to build an outline.</span>';
     tocList.appendChild(empty);
     return;
   }
@@ -1433,7 +1689,6 @@ function commandPaletteCommands() {
     { label: 'Edit: Find...', action: 'edit-find' },
     { label: 'Edit: Replace...', action: 'edit-replace' },
     { label: 'Tools: Check Links...', action: 'check-links' },
-    { label: 'Tools: Keyboard Shortcuts...', action: 'open-keybindings' },
     { label: 'File: Version History...', action: 'open-version-history' },
     { label: 'View: Show Markdown Editor', action: 'toggle-raw-view', payload: { enabled: true } },
     { label: 'View: Show Preview', action: 'toggle-formatted-view', payload: { enabled: true } },
@@ -1443,8 +1698,9 @@ function commandPaletteCommands() {
     { label: 'View: Syncronise Views', action: 'toggle-sync-views' },
     { label: 'View: Toggle Word Wrap', action: 'toggle-word-wrap' },
     { label: 'View: Toggle Line Numbers', action: 'toggle-line-numbers' },
-    { label: 'Tools: Edit Front Matter', action: 'edit-front-matter' },
+    { label: 'Tools: Document Metadata', action: 'edit-front-matter' },
     { label: 'Tools: Load Theme', action: 'load-theme' },
+    { label: 'Tools: Settings', action: 'open-settings' },
     { label: 'Tools: Theme Light', action: 'set-dark-mode-mode', payload: { mode: 'light' } },
     { label: 'Tools: Theme Dark', action: 'set-dark-mode-mode', payload: { mode: 'dark' } },
     { label: 'Tools: Theme Auto', action: 'set-dark-mode-mode', payload: { mode: 'auto' } }
@@ -1618,6 +1874,33 @@ function updateMenuChecks() {
   if (exportPagesPresentation) exportPagesPresentation.classList.toggle('checked', exportPagesPreset === 'presentation');
   if (dictionaryUsToggle) dictionaryUsToggle.disabled = !spellcheckEnabled;
   if (dictionaryGbToggle) dictionaryGbToggle.disabled = !spellcheckEnabled;
+  syncSettingsControls();
+}
+
+function syncSettingsControls() {
+  if (settingsRibbonMode) settingsRibbonMode.value = ribbonMode;
+  if (settingsThemeMode) settingsThemeMode.value = darkModeMode;
+  if (settingsEmbeddedMenu) settingsEmbeddedMenu.checked = embeddedMenu;
+  if (settingsEditorFont) settingsEditorFont.value = editorFontFamily;
+  if (settingsWordWrap) settingsWordWrap.checked = wordWrapEnabled;
+  if (settingsLineNumbers) settingsLineNumbers.checked = lineNumbersEnabled;
+  if (settingsSpellcheck) settingsSpellcheck.checked = spellcheckEnabled;
+  if (settingsDictionaryLanguage) {
+    settingsDictionaryLanguage.value = dictionaryLanguage;
+    settingsDictionaryLanguage.disabled = !spellcheckEnabled;
+  }
+  if (settingsMermaidPreview) settingsMermaidPreview.checked = mermaidPreviewEnabled;
+  if (settingsThemeDebug) settingsThemeDebug.checked = themeDebugVisible;
+}
+
+function openSettings() {
+  syncSettingsControls();
+  renderKeybindingsEditor();
+  if (settingsModal) settingsModal.classList.remove('hidden');
+}
+
+function closeSettings() {
+  if (settingsModal) settingsModal.classList.add('hidden');
 }
 
 function notifyNativeMenuState() {
@@ -1649,7 +1932,9 @@ function notifyNativeMenuState() {
     exportPdfPreset,
     exportDocxPreset,
     exportPagesPreset,
-    activeThemeFileName
+    activeThemeFileName,
+    editorFontFamily,
+    editorFontFamilies
   });
 }
 
@@ -2049,7 +2334,37 @@ function ensurePreviewChromeCss(doc) {
   previewChromeCss.textContent = `
     body {
       box-sizing: border-box !important;
-      padding: 28px 28px 32px 28px !important;
+      padding: 12px 28px 32px 28px !important;
+    }
+    body > :first-child {
+      margin-top: 0 !important;
+    }
+    .preview-empty-state {
+      min-height: calc(100vh - 48px);
+      display: grid;
+      place-items: center;
+      color: #8b92a1;
+      font-family: -apple-system, BlinkMacSystemFont, 'SF Pro Text', 'Helvetica Neue', sans-serif;
+      text-align: center;
+    }
+    .preview-empty-state > div {
+      max-width: 320px;
+      display: grid;
+      gap: 6px;
+    }
+    .preview-empty-state strong {
+      color: #666675;
+      font-size: 13px;
+    }
+    .preview-empty-state span {
+      font-size: 12px;
+      line-height: 1.45;
+    }
+    body.theme-dark .preview-empty-state {
+      color: #858ea0;
+    }
+    body.theme-dark .preview-empty-state strong {
+      color: #c3cad9;
     }
   `;
 }
@@ -2149,7 +2464,10 @@ function ensureFrameDocument() {
     <style id="preview-chrome-css">
       body {
         box-sizing: border-box !important;
-        padding: 28px 28px 32px 28px !important;
+        padding: 12px 28px 32px 28px !important;
+      }
+      body > :first-child {
+        margin-top: 0 !important;
       }
     </style>
   </head>
@@ -2410,11 +2728,14 @@ function patchFrameHtml(html) {
   const doc = frame.contentDocument;
   if (!doc) return;
 
+  const nextHtml = String(html || '').trim().length > 0
+    ? html
+    : '<div class="preview-empty-state" contenteditable="false"><div><strong>Preview appears here</strong><span>Start writing Markdown in the editor to see it rendered.</span></div></div>';
   const bodyElement = doc.body;
   const tempBody = doc.createElement('body');
   tempBody.setAttribute('contenteditable', 'true');
   tempBody.className = doc.body.className;
-  tempBody.innerHTML = html;
+  tempBody.innerHTML = nextHtml;
 
   morphdom(bodyElement, tempBody, {
     childrenOnly: true,
@@ -4209,6 +4530,9 @@ async function handleAction(action, payload = {}) {
     case 'set-line-numbers':
       setLineNumbersEnabled(Boolean(payload.enabled));
       break;
+    case 'set-editor-font-family':
+      setEditorFontFamily(payload.family || '');
+      break;
     case 'toggle-mermaid-preview':
       setMermaidPreviewEnabled(!mermaidPreviewEnabled);
       break;
@@ -4251,6 +4575,12 @@ async function handleAction(action, payload = {}) {
       if (darkModeMode === 'auto') {
         setDarkMode(Boolean(payload.enabled), { persist: false });
       }
+      break;
+    case 'open-settings':
+      openSettings();
+      break;
+    case 'close-settings':
+      closeSettings();
       break;
     case 'edit-front-matter':
       openFrontMatterEditor();
@@ -4402,9 +4732,9 @@ function wireKeyboardShortcuts() {
         closeLinkCheckModal();
         return;
       }
-      if (keybindingsModal && !keybindingsModal.classList.contains('hidden')) {
+      if (settingsModal && !settingsModal.classList.contains('hidden')) {
         event.preventDefault();
-        closeKeybindingsModal();
+        closeSettings();
         return;
       }
       if (versionHistoryModal && !versionHistoryModal.classList.contains('hidden')) {
@@ -4443,6 +4773,49 @@ function wireEvents() {
     invalidatePreviewAnchorCache();
     updateLineNumbers({ force: true });
   });
+  if (editorFontMenu) {
+    editorFontMenu.addEventListener('click', (event) => {
+      const target = event.target;
+      const button = target.closest('button[data-editor-font-family]');
+      if (!button) return;
+      setEditorFontFamily(button.dataset.editorFontFamily || '');
+      closeAllMenus();
+    });
+  }
+  if (settingsRibbonMode) {
+    settingsRibbonMode.addEventListener('change', () => setRibbonMode(settingsRibbonMode.value));
+  }
+  if (settingsThemeMode) {
+    settingsThemeMode.addEventListener('change', () => {
+      void setDarkModeMode(settingsThemeMode.value);
+    });
+  }
+  if (settingsEmbeddedMenu) {
+    settingsEmbeddedMenu.addEventListener('change', () => setEmbeddedMenu(settingsEmbeddedMenu.checked));
+  }
+  if (settingsEditorFont) {
+    settingsEditorFont.addEventListener('change', () => setEditorFontFamily(settingsEditorFont.value));
+  }
+  if (settingsWordWrap) {
+    settingsWordWrap.addEventListener('change', () => setWordWrapEnabled(settingsWordWrap.checked));
+  }
+  if (settingsLineNumbers) {
+    settingsLineNumbers.addEventListener('change', () => setLineNumbersEnabled(settingsLineNumbers.checked));
+  }
+  if (settingsSpellcheck) {
+    settingsSpellcheck.addEventListener('change', () => setSpellcheckEnabled(settingsSpellcheck.checked));
+  }
+  if (settingsDictionaryLanguage) {
+    settingsDictionaryLanguage.addEventListener('change', () => {
+      void setDictionaryLanguage(settingsDictionaryLanguage.value);
+    });
+  }
+  if (settingsMermaidPreview) {
+    settingsMermaidPreview.addEventListener('change', () => setMermaidPreviewEnabled(settingsMermaidPreview.checked));
+  }
+  if (settingsThemeDebug) {
+    settingsThemeDebug.addEventListener('change', () => setThemeDebugVisible(settingsThemeDebug.checked));
+  }
   if (typeof ResizeObserver !== 'undefined') {
     const rawEditorResizeObserver = new ResizeObserver(() => {
       updateLineNumbers({ force: true });
@@ -4607,7 +4980,7 @@ function wireEvents() {
       const combo = comboFromKeyboardEvent(event);
       if (!combo) return;
       event.preventDefault();
-      input.value = combo;
+      input.value = formatKeyComboForPlatform(combo);
     });
   }
 
@@ -4711,6 +5084,11 @@ function bootstrap() {
     const savedRibbonMode = await loadRibbonModePreference();
     setRibbonMode(savedRibbonMode, { persist: false });
     diagnosticLog('renderer.startup.ribbon-mode.loaded', { mode: savedRibbonMode });
+
+    const savedEditorFont = await loadEditorFontPreference();
+    setEditorFontFamily(savedEditorFont, { persist: false });
+    void populateEditorFontMenu();
+    diagnosticLog('renderer.startup.editor-font.loaded', { family: editorFontFamily || 'system' });
 
     const savedSyncViews = await loadSyncViewsPreference();
     setSyncViewsEnabled(savedSyncViews, { persist: false });

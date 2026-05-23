@@ -1,10 +1,10 @@
 cask "monospire" do
-  version "1.2.4"
-  sha256 "0dda9f5ba702d3340a7cddb3bdff4785a378a8061fb5a62211aa0d40f935f77f"
+  version "1.2.5"
+  sha256 "d24ab6a9433900f97a0c970e360f2194d5315fb486ebeb1fec9ee285119dd103"
 
-  url "https://github.com/CurzonMonroe/Monospire/releases/download/v1.2.4/Monospire-1.2.4-arm64.dmg"
+  url "https://github.com/CurzonMonroe/Monospire/releases/download/v1.2.5/Monospire-1.2.5-arm64.dmg"
   name "Monospire"
-  desc "Native-feeling macOS Markdown editor with dual editing views"
+  desc "A focused Markdown editor"
   homepage "https://github.com/CurzonMonroe/Monospire"
 
   depends_on macos: ">= :ventura"

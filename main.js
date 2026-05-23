@@ -14,11 +14,14 @@ const { execFile } = require('child_process');
 
 app.setName('Monospire');
 let recentFilesCache = [];
+let editorFontMenuFamilies = [];
+let selectedEditorFontFamily = '';
 const windowSessionState = new Map();
 let isQuittingForSessionPersist = false;
 let diagnosticsPathCache = null;
 const diagnosticsTmpPath = path.join(os.tmpdir(), 'monospire-diagnostics.log');
 let mermaidWorkerWindow = null;
+let aboutWindow = null;
 let mermaidWorkerReady = false;
 let mermaidWorkerLoadingPromise = null;
 const mermaidPendingRequests = new Map();
@@ -45,6 +48,8 @@ const MIN_WINDOW_BOUNDS = {
   width: 980,
   height: 660
 };
+const DEFAULT_EDITOR_FONT_FAMILY = 'ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace';
+let installedFontFamiliesCache = null;
 
 function getDiagnosticsPath() {
   if (diagnosticsPathCache) return diagnosticsPathCache;
@@ -173,6 +178,103 @@ function runExecFile(command, args, options = {}) {
       });
     });
   });
+}
+
+function normalizeFontFamilyName(value) {
+  return String(value || '')
+    .trim()
+    .replace(/^["']|["']$/g, '')
+    .replace(/\s+/g, ' ');
+}
+
+function uniqueSortedFontFamilies(families) {
+  const seen = new Set();
+  const output = [];
+  for (const item of families || []) {
+    const family = normalizeFontFamilyName(item);
+    const key = family.toLowerCase();
+    if (!family || seen.has(key)) continue;
+    seen.add(key);
+    output.push(family);
+  }
+  return output.sort((a, b) => a.localeCompare(b, undefined, { sensitivity: 'base' }));
+}
+
+async function listMacFontFamilies() {
+  const { stdout } = await runExecFile('system_profiler', ['SPFontsDataType', '-json'], {
+    timeout: 20000,
+    maxBuffer: 20 * 1024 * 1024
+  });
+  const parsed = JSON.parse(stdout);
+  const items = Array.isArray(parsed?.SPFontsDataType) ? parsed.SPFontsDataType : [];
+  const families = [];
+  for (const item of items) {
+    const typefaces = Array.isArray(item?.typefaces) ? item.typefaces : [];
+    for (const face of typefaces) {
+      families.push(face?.family || face?._name || face?.fullname);
+    }
+  }
+  return uniqueSortedFontFamilies(families);
+}
+
+async function listLinuxFontFamilies() {
+  const { stdout } = await runExecFile('fc-list', [':', 'family'], {
+    timeout: 10000,
+    maxBuffer: 10 * 1024 * 1024
+  });
+  const families = [];
+  for (const line of stdout.split('\n')) {
+    for (const family of line.split(',')) {
+      families.push(family);
+    }
+  }
+  return uniqueSortedFontFamilies(families);
+}
+
+async function listWindowsFontFamilies() {
+  const command = [
+    '$shell = New-Object -ComObject Shell.Application;',
+    '$folder = $shell.Namespace(0x14);',
+    '$folder.Items() | ForEach-Object { $folder.GetDetailsOf($_, 21) } | Where-Object { $_ }'
+  ].join(' ');
+  const { stdout } = await runExecFile('powershell.exe', ['-NoProfile', '-Command', command], {
+    timeout: 15000,
+    maxBuffer: 10 * 1024 * 1024
+  });
+  return uniqueSortedFontFamilies(stdout.split('\n'));
+}
+
+async function listInstalledFontFamilies() {
+  if (installedFontFamiliesCache) return installedFontFamiliesCache;
+  const fallback = uniqueSortedFontFamilies([
+    'SF Mono',
+    'Menlo',
+    'Monaco',
+    'Courier New',
+    'Consolas',
+    'Liberation Mono',
+    'DejaVu Sans Mono',
+    'Ubuntu Mono'
+  ]);
+  try {
+    if (process.platform === 'darwin') installedFontFamiliesCache = await listMacFontFamilies();
+    else if (process.platform === 'linux') installedFontFamiliesCache = await listLinuxFontFamilies();
+    else if (process.platform === 'win32') installedFontFamiliesCache = await listWindowsFontFamilies();
+    else installedFontFamiliesCache = fallback;
+  } catch (error) {
+    logDiagnostics('fonts.list.error', { error });
+    installedFontFamiliesCache = fallback;
+  }
+  if (!installedFontFamiliesCache || installedFontFamiliesCache.length === 0) {
+    installedFontFamiliesCache = fallback;
+  }
+  return installedFontFamiliesCache;
+}
+
+function normalizeEditorFontFamily(value) {
+  const family = normalizeFontFamilyName(value);
+  if (!family || family.length > 160) return DEFAULT_EDITOR_FONT_FAMILY;
+  return family;
 }
 
 async function convertDocxToPages(sourceDocxPath, targetPagesPath) {
@@ -518,7 +620,51 @@ function buildOpenRecentSubmenu() {
   return submenu;
 }
 
+function buildEditorFontSubmenu() {
+  const families = Array.isArray(editorFontMenuFamilies) ? editorFontMenuFamilies : [];
+  const submenu = [
+    {
+      id: 'editor-font-system',
+      label: 'System Mono',
+      type: 'radio',
+      checked: selectedEditorFontFamily === '',
+      click: () => sendMenuAction('set-editor-font-family', { family: '' })
+    }
+  ];
+
+  if (families.length > 0) {
+    submenu.push({ type: 'separator' });
+    for (const family of families) {
+      submenu.push({
+        id: `editor-font-${crypto.createHash('sha1').update(family).digest('hex').slice(0, 12)}`,
+        label: family,
+        type: 'radio',
+        checked: selectedEditorFontFamily === family,
+        click: () => sendMenuAction('set-editor-font-family', { family })
+      });
+    }
+  } else {
+    submenu.push({ type: 'separator' });
+    submenu.push({ label: 'Loading Fonts...', enabled: false });
+  }
+
+  return submenu;
+}
+
 function resolveAppIconPath() {
+  const candidates = [
+    path.join(__dirname, 'assets', 'Monospire.icns'),
+    path.join(__dirname, 'assets', 'monospire-icon-1024.png'),
+    path.join(__dirname, 'assets', 'monospire-icon.svg')
+  ];
+
+  for (const candidate of candidates) {
+    if (fsSync.existsSync(candidate)) return candidate;
+  }
+  return null;
+}
+
+function resolveAboutIconPath() {
   const candidates = [
     path.join(__dirname, 'assets', 'monospire-icon-1024.png'),
     path.join(__dirname, 'assets', 'Monospire.icns'),
@@ -554,6 +700,190 @@ function applyDockIcon() {
   }
 }
 
+function configureAboutPanel() {
+  const iconPath = resolveAboutIconPath();
+  const version = app.getVersion();
+  const options = {
+    applicationName: 'Monospire',
+    applicationVersion: version,
+    version: `Build ${version}`,
+    copyright: 'Copyright 2026 Curzon Monroe',
+    credits: [
+      'A focused Markdown editor',
+      '',
+      `Electron ${process.versions.electron}`,
+      `Chromium ${process.versions.chrome}`,
+      `Node.js ${process.versions.node}`
+    ].join('\n')
+  };
+  if (iconPath) options.iconPath = iconPath;
+  try {
+    app.setAboutPanelOptions(options);
+  } catch (error) {
+    logDiagnostics('about.configure.error', { error });
+  }
+}
+
+function escapeHtml(value) {
+  return String(value ?? '')
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
+}
+
+function showAboutWindow(parentWindow = null) {
+  if (aboutWindow && !aboutWindow.isDestroyed()) {
+    aboutWindow.focus();
+    return;
+  }
+
+  const appIconPath = resolveAppIconPath();
+  const aboutIconPath = resolveAboutIconPath();
+  const aboutIcon = aboutIconPath ? nativeImage.createFromPath(aboutIconPath) : null;
+  const iconDataUrl = aboutIcon && !aboutIcon.isEmpty() ? aboutIcon.resize({ width: 112, height: 112, quality: 'best' }).toDataURL() : '';
+  const version = app.getVersion();
+  const html = `<!doctype html>
+<html>
+  <head>
+    <meta charset="utf-8" />
+    <title>About Monospire</title>
+    <style>
+      :root { color-scheme: light dark; }
+      * { box-sizing: border-box; }
+      body {
+        margin: 0;
+        min-height: 100vh;
+        display: grid;
+        place-items: center;
+        background: linear-gradient(180deg, #f8f8fb 0%, #eceef5 100%);
+        color: #202329;
+        font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Helvetica Neue", sans-serif;
+      }
+      main {
+        width: 100%;
+        padding: 26px 30px 22px;
+        text-align: center;
+      }
+      img {
+        width: 112px;
+        height: 112px;
+        display: block;
+        margin: 0 auto 12px;
+        border-radius: 24px;
+      }
+      h1 {
+        margin: 0;
+        font-size: 26px;
+        line-height: 1.15;
+        font-weight: 750;
+      }
+      .tagline {
+        margin: 7px 0 14px;
+        color: #5e6674;
+        font-size: 14px;
+      }
+      .meta {
+        display: inline-grid;
+        gap: 4px;
+        min-width: 250px;
+        padding: 10px 14px;
+        border: 1px solid #d7dbe4;
+        border-radius: 10px;
+        background: rgba(255, 255, 255, 0.66);
+        color: #4f5868;
+        font-size: 12px;
+        text-align: left;
+      }
+      .meta div {
+        display: flex;
+        justify-content: space-between;
+        gap: 18px;
+      }
+      .meta span:first-child {
+        color: #798292;
+      }
+      .copyright {
+        margin: 14px 0 0;
+        color: #7b8493;
+        font-size: 11px;
+      }
+      button {
+        margin-top: 16px;
+        min-width: 76px;
+        border: 1px solid #c9ced9;
+        border-radius: 8px;
+        background: #ffffff;
+        color: #202329;
+        font: inherit;
+        font-size: 13px;
+        padding: 6px 14px;
+      }
+      button:active { background: #eef2f8; }
+      @media (prefers-color-scheme: dark) {
+        body {
+          background: linear-gradient(180deg, #22262e 0%, #191c22 100%);
+          color: #f2f4f8;
+        }
+        .tagline { color: #b9c0cc; }
+        .meta {
+          border-color: #3d4350;
+          background: rgba(17, 20, 26, 0.62);
+          color: #c4cad5;
+        }
+        .meta span:first-child,
+        .copyright { color: #8f98a8; }
+        button {
+          border-color: #4a5060;
+          background: #2b303a;
+          color: #f2f4f8;
+        }
+      }
+    </style>
+  </head>
+  <body>
+    <main>
+      ${iconDataUrl ? `<img src="${iconDataUrl}" alt="" />` : ''}
+      <h1>Monospire</h1>
+      <p class="tagline">A focused Markdown editor</p>
+      <section class="meta" aria-label="Version information">
+        <div><span>Version</span><strong>${escapeHtml(version)}</strong></div>
+        <div><span>Electron</span><strong>${escapeHtml(process.versions.electron)}</strong></div>
+        <div><span>Chromium</span><strong>${escapeHtml(process.versions.chrome)}</strong></div>
+        <div><span>Node.js</span><strong>${escapeHtml(process.versions.node)}</strong></div>
+      </section>
+      <p class="copyright">Copyright 2026 Curzon Monroe</p>
+      <button autofocus onclick="window.close()">OK</button>
+    </main>
+  </body>
+</html>`;
+
+  aboutWindow = new BrowserWindow({
+    width: 430,
+    height: 420,
+    resizable: false,
+    minimizable: false,
+    maximizable: false,
+    fullscreenable: false,
+    title: 'About Monospire',
+    parent: parentWindow || undefined,
+    modal: Boolean(parentWindow),
+    backgroundColor: nativeTheme.shouldUseDarkColors ? '#191c22' : '#f2f3f7',
+    ...(appIconPath ? { icon: appIconPath } : {}),
+    webPreferences: {
+      contextIsolation: true,
+      nodeIntegration: false
+    }
+  });
+
+  aboutWindow.on('closed', () => {
+    aboutWindow = null;
+  });
+  aboutWindow.setMenuBarVisibility(false);
+  aboutWindow.loadURL(`data:text/html;charset=utf-8,${encodeURIComponent(html)}`);
+}
+
 function buildAppMenu() {
   const template = [
     {
@@ -568,20 +898,6 @@ function buildAppMenu() {
           label: 'New Window',
           accelerator: 'CmdOrCtrl+Shift+N',
           click: () => sendMenuAction('file-new-window')
-        },
-        {
-          label: 'New from Template...',
-          accelerator: 'Alt+CmdOrCtrl+N',
-          click: () => sendMenuAction('file-new-from-template')
-        },
-        { type: 'separator' },
-        {
-          label: 'Set Default Template...',
-          click: () => sendMenuAction('file-set-default-template')
-        },
-        {
-          label: 'Reset Default Template',
-          click: () => sendMenuAction('file-reset-default-template')
         },
         { type: 'separator' },
         {
@@ -655,21 +971,6 @@ function buildAppMenu() {
       label: 'View',
       submenu: [
         {
-          id: 'toggle-raw',
-          label: 'Show Markdown Editor',
-          type: 'checkbox',
-          checked: true,
-          click: (menuItem) => sendMenuAction('toggle-raw-view', { enabled: menuItem.checked })
-        },
-        {
-          id: 'toggle-formatted',
-          label: 'Show Preview',
-          type: 'checkbox',
-          checked: false,
-          click: (menuItem) => sendMenuAction('toggle-formatted-view', { enabled: menuItem.checked })
-        },
-        { type: 'separator' },
-        {
           label: 'Zoom',
           submenu: [
             {
@@ -689,6 +990,21 @@ function buildAppMenu() {
               ]
             }
           ]
+        },
+        { type: 'separator' },
+        {
+          id: 'toggle-raw',
+          label: 'Show Markdown Editor',
+          type: 'checkbox',
+          checked: true,
+          click: (menuItem) => sendMenuAction('toggle-raw-view', { enabled: menuItem.checked })
+        },
+        {
+          id: 'toggle-formatted',
+          label: 'Show Preview',
+          type: 'checkbox',
+          checked: false,
+          click: (menuItem) => sendMenuAction('toggle-formatted-view', { enabled: menuItem.checked })
         },
         { type: 'separator' },
         {
@@ -752,6 +1068,9 @@ function buildAppMenu() {
     {
       label: 'Tools',
       submenu: [
+        { label: 'Document Metadata...', accelerator: 'CmdOrCtrl+M', click: () => sendMenuAction('edit-front-matter') },
+        { label: 'Check Links...', click: () => sendMenuAction('check-links') },
+        { type: 'separator' },
         {
           label: 'Themes',
           submenu: [
@@ -768,9 +1087,24 @@ function buildAppMenu() {
             { label: 'Load Theme...', click: () => sendMenuAction('load-theme') }
           ]
         },
-        { label: 'Edit Front Matter...', click: () => sendMenuAction('edit-front-matter') },
-        { label: 'Check Links...', click: () => sendMenuAction('check-links') },
-        { label: 'Keyboard Shortcuts...', click: () => sendMenuAction('open-keybindings') },
+        {
+          label: 'Templates',
+          submenu: [
+            {
+              label: 'New from Template...',
+              accelerator: 'Alt+CmdOrCtrl+N',
+              click: () => sendMenuAction('file-new-from-template')
+            },
+            {
+              label: 'Set Default Template...',
+              click: () => sendMenuAction('file-set-default-template')
+            },
+            {
+              label: 'Reset Default Template',
+              click: () => sendMenuAction('file-reset-default-template')
+            }
+          ]
+        },
         { type: 'separator' },
         {
           label: 'Export Presets',
@@ -874,101 +1208,7 @@ function buildAppMenu() {
           ]
         },
         { type: 'separator' },
-        {
-          label: 'Interface',
-          submenu: [
-            {
-              id: 'ribbon-icons-only',
-              label: 'Ribbon: Icons only',
-              type: 'radio',
-              click: () => sendMenuAction('ribbon-display', { mode: 'icons' })
-            },
-            {
-              id: 'ribbon-text-only',
-              label: 'Ribbon: Text only',
-              type: 'radio',
-              click: () => sendMenuAction('ribbon-display', { mode: 'text' })
-            },
-            {
-              id: 'ribbon-icons-text',
-              label: 'Ribbon: Icons and Text',
-              type: 'radio',
-              checked: true,
-              click: () => sendMenuAction('ribbon-display', { mode: 'both' })
-            },
-            { type: 'separator' },
-            {
-              id: 'theme-mode-light',
-              label: 'Theme: Light',
-              type: 'radio',
-              checked: true,
-              click: () => sendMenuAction('set-dark-mode-mode', { mode: 'light' })
-            },
-            {
-              id: 'theme-mode-dark',
-              label: 'Theme: Dark',
-              type: 'radio',
-              checked: false,
-              click: () => sendMenuAction('set-dark-mode-mode', { mode: 'dark' })
-            },
-            {
-              id: 'theme-mode-auto',
-              label: 'Theme: Auto',
-              type: 'radio',
-              checked: false,
-              click: () => sendMenuAction('set-dark-mode-mode', { mode: 'auto' })
-            },
-            {
-              id: 'display-menu-in-app',
-              label: 'Display Menu in App',
-              type: 'checkbox',
-              checked: false,
-              click: (item) => sendMenuAction('set-embedded-menu', { enabled: item.checked })
-            }
-          ]
-        },
-        {
-          label: 'Proofing',
-          submenu: [
-            {
-              id: 'spell-check',
-              label: 'Spell Check',
-              type: 'checkbox',
-              checked: true,
-              click: (item) => sendMenuAction('set-spellcheck', { enabled: item.checked })
-            },
-            {
-              id: 'dictionary-en-us',
-              label: 'Dictionary: English (US)',
-              type: 'radio',
-              checked: true,
-              click: () => sendMenuAction('set-dictionary-language', { language: 'en-US' })
-            },
-            {
-              id: 'dictionary-en-gb',
-              label: 'Dictionary: English (UK)',
-              type: 'radio',
-              click: () => sendMenuAction('set-dictionary-language', { language: 'en-GB' })
-            }
-          ]
-        },
-        { type: 'separator' },
-        {
-          id: 'mermaid-preview-experimental',
-          label: 'Mermaid Preview (Experimental)',
-          type: 'checkbox',
-          checked: false,
-          click: (item) => sendMenuAction('set-mermaid-preview', { enabled: item.checked })
-        },
-        {
-          id: 'display-theme-debug',
-          label: 'Show Theme Debug',
-          accelerator: 'CmdOrCtrl+Shift+D',
-          type: 'checkbox',
-          checked: false,
-          click: (item) => sendMenuAction('set-theme-debug', { enabled: item.checked })
-        },
-        { type: 'separator' },
+        { label: 'Settings...', accelerator: 'CmdOrCtrl+,', click: () => sendMenuAction('open-settings') },
         { label: 'About Monospire', click: () => sendMenuAction('show-about') }
       ]
     }
@@ -977,7 +1217,7 @@ function buildAppMenu() {
   if (process.platform === 'darwin') {
     template.unshift({
       label: 'Monospire',
-      submenu: [{ role: 'about' }, { type: 'separator' }, { role: 'services' }, { type: 'separator' }, { role: 'hide' }, { role: 'hideOthers' }, { role: 'unhide' }, { type: 'separator' }, { role: 'quit', label: 'Exit' }]
+      submenu: [{ label: 'About Monospire', click: () => showAboutWindow(BrowserWindow.getFocusedWindow()) }, { type: 'separator' }, { role: 'services' }, { type: 'separator' }, { role: 'hide' }, { role: 'hideOthers' }, { role: 'unhide' }, { type: 'separator' }, { role: 'quit', label: 'Exit' }]
     });
   }
 
@@ -1862,6 +2102,28 @@ ipcMain.handle('load-line-numbers-preference', async () => {
   return { loaded: true, enabled: settings.lineNumbers };
 });
 
+ipcMain.handle('list-installed-font-families', async () => {
+  const families = await listInstalledFontFamilies();
+  return { loaded: true, families };
+});
+
+ipcMain.handle('save-editor-font-preference', async (_event, payload) => {
+  const settings = await readSettings();
+  const family = normalizeFontFamilyName(payload?.family);
+  settings.editorFontFamily = family ? normalizeEditorFontFamily(family) : null;
+  await writeSettings(settings);
+  return { saved: true };
+});
+
+ipcMain.handle('load-editor-font-preference', async () => {
+  const settings = await readSettings();
+  const family = normalizeFontFamilyName(settings.editorFontFamily);
+  if (!family || family === DEFAULT_EDITOR_FONT_FAMILY || family.includes(',')) {
+    return { loaded: false, family: DEFAULT_EDITOR_FONT_FAMILY };
+  }
+  return { loaded: true, family: normalizeEditorFontFamily(family) };
+});
+
 ipcMain.handle('save-mermaid-preview-preference', async (_event, payload) => {
   const settings = await readSettings();
   settings.mermaidPreviewEnabled = payload?.enabled === true;
@@ -2402,11 +2664,29 @@ ipcMain.on('set-document-state', (event, payload) => {
 });
 
 ipcMain.on('update-menu-state', (event, payload) => {
-  const menu = Menu.getApplicationMenu();
+  let menu = Menu.getApplicationMenu();
   if (!menu || !payload) return;
   const window = BrowserWindow.fromWebContents(event.sender);
   if (window && typeof payload.mermaidPreviewEnabled === 'boolean') {
     window.__mermaidPreviewEnabled = payload.mermaidPreviewEnabled;
+  }
+
+  let shouldRebuildMenu = false;
+  if (Array.isArray(payload.editorFontFamilies)) {
+    const nextFamilies = uniqueSortedFontFamilies(payload.editorFontFamilies);
+    if (JSON.stringify(nextFamilies) !== JSON.stringify(editorFontMenuFamilies)) {
+      editorFontMenuFamilies = nextFamilies;
+      shouldRebuildMenu = true;
+    }
+  }
+  if (typeof payload.editorFontFamily === 'string' && payload.editorFontFamily !== selectedEditorFontFamily) {
+    selectedEditorFontFamily = normalizeFontFamilyName(payload.editorFontFamily);
+    shouldRebuildMenu = true;
+  }
+  if (shouldRebuildMenu) {
+    buildAppMenu();
+    menu = Menu.getApplicationMenu();
+    if (!menu) return;
   }
 
   const rawItem = menu.getMenuItemById('toggle-raw');
@@ -2553,14 +2833,8 @@ ipcMain.handle('confirm-close-window', (event) => {
 
 ipcMain.handle('show-about-dialog', async (event) => {
   const window = BrowserWindow.fromWebContents(event.sender);
-  const version = app.getVersion();
-  await dialog.showMessageBox(window || undefined, {
-    type: 'info',
-    title: 'About Monospire',
-    message: 'Monospire',
-    detail: `Version ${version}\nElectron ${process.versions.electron}\nNode ${process.versions.node}\nChrome ${process.versions.chrome}\n©2026 Curzon Monroe`,
-    buttons: ['OK']
-  });
+  showAboutWindow(window || null);
+  return { shown: true };
 });
 
 ipcMain.handle('show-theme-load-error-dialog', async (event, payload) => {
@@ -2637,6 +2911,7 @@ for (const arg of process.argv.slice(1)) {
 app.whenReady().then(() => {
   logDiagnostics('app.whenReady');
   applyDockIcon();
+  configureAboutPanel();
   void (async () => {
     await refreshRecentFilesCache();
     logDiagnostics('app.recent-files.ready', { count: recentFilesCache.length });
