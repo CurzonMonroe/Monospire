@@ -7,11 +7,13 @@ TAG_NAME="${GITHUB_RELEASE_TAG:-v${APP_VERSION}}"
 REPO="${GITHUB_RELEASE_REPO:-CurzonMonroe/Monospire}"
 TOKEN="${GH_RELEASE_TOKEN:-${GITHUB_RELEASE_TOKEN:-}}"
 ARTIFACT_DIR="${GITHUB_RELEASE_ARTIFACT_DIR:-${ROOT_DIR}/dist}"
+ARTIFACT_PATTERNS="${GITHUB_RELEASE_ARTIFACT_PATTERNS:-*.deb *.rpm *.tar.xz *.AppImage}"
+ARTIFACT_KIND="${GITHUB_RELEASE_ARTIFACT_KIND:-Linux}"
 DRY_RUN="false"
 
 usage() {
   cat <<'USAGE'
-Upload Linux distribution artifacts to a GitHub release.
+Upload distribution artifacts to a GitHub release.
 
 Usage:
   scripts/upload-linux-artifacts-to-github-release.sh [--dry-run]
@@ -22,7 +24,9 @@ Environment:
   GITHUB_RELEASE_REPO    Repository owner/name. Defaults to CurzonMonroe/Monospire.
   GITHUB_RELEASE_TAG     Release tag. Defaults to v<package.json version>.
   GITHUB_RELEASE_ARTIFACT_DIR
-                         Directory containing Linux artifacts. Defaults to dist.
+                         Directory containing artifacts. Defaults to dist.
+  GITHUB_RELEASE_ARTIFACT_PATTERNS
+                         Space-separated find patterns. Defaults to Linux packages.
   GITHUB_RELEASE_REPLACE_EXISTING
                          Replace existing assets when set to true. Defaults to false.
 USAGE
@@ -47,19 +51,19 @@ while [[ $# -gt 0 ]]; do
 done
 
 ARTIFACTS=()
-for pattern in '*.deb' '*.rpm' '*.tar.xz' '*.AppImage'; do
+for pattern in ${ARTIFACT_PATTERNS}; do
   while IFS= read -r artifact; do
     ARTIFACTS+=("${artifact}")
   done < <(find "${ARTIFACT_DIR}" -maxdepth 1 -type f -name "${pattern}" | sort)
 done
 
 if [[ "${#ARTIFACTS[@]}" -eq 0 ]]; then
-  echo "No Linux artifacts found in ${ARTIFACT_DIR}" >&2
+  echo "No ${ARTIFACT_KIND} artifacts found in ${ARTIFACT_DIR}" >&2
   exit 1
 fi
 
 if [[ "${DRY_RUN}" == "true" ]]; then
-  echo "Would upload ${#ARTIFACTS[@]} artifact(s) to ${REPO} release ${TAG_NAME}:"
+  echo "Would upload ${#ARTIFACTS[@]} ${ARTIFACT_KIND} artifact(s) to ${REPO} release ${TAG_NAME}:"
   printf '  %s\n' "${ARTIFACTS[@]}"
   exit 0
 fi
@@ -240,4 +244,4 @@ for artifact in "${ARTIFACTS[@]}"; do
   upload_asset "${artifact}" "${name}" "${encoded_name}"
 done
 
-echo "Uploaded ${#ARTIFACTS[@]} Linux artifact(s) to https://github.com/${REPO}/releases/tag/${TAG_NAME}"
+echo "Uploaded ${#ARTIFACTS[@]} ${ARTIFACT_KIND} artifact(s) to https://github.com/${REPO}/releases/tag/${TAG_NAME}"

@@ -10,7 +10,8 @@
     "pack:mac": "electron-builder --mac --dir",
     "dist:mac": "electron-builder --mac && npm run brew:cask",
     "dist:linux": "electron-builder --linux AppImage deb rpm tar.xz --x64 --arm64 --publish never",
-    "brew:cask": "bash ./scripts/generate-homebrew-cask.sh"
+    "brew:cask": "bash ./scripts/generate-homebrew-cask.sh",
+    "release:mac": "CSC_IDENTITY_AUTO_DISCOVERY=false npm run dist:mac && bash ./scripts/upload-macos-artifacts-to-github-release.sh"
   },
   "keywords": [
     "markdown",

@@ -150,14 +150,22 @@ npm run dist:mac
 
 This creates the macOS app and DMG under `dist/`, then updates the Homebrew release files.
 
+Build the macOS release and upload the DMG assets to the matching GitHub release:
+
+```bash
+npm run release:mac
+```
+
+`release:mac` expects `GITHUB_RELEASE_TOKEN` or `GH_RELEASE_TOKEN` to be available with GitHub Contents read/write access. It uses ad-hoc signing by default to avoid local keychain ambiguity during packaging.
+
 Expected outputs include:
 
 - `dist/mac-arm64/Monospire.app`
-- `dist/Monospire-1.2.4-arm64.dmg`
-- `dist/Monospire-1.2.4-arm64.dmg.blockmap`
+- `dist/Monospire-<version>-arm64.dmg`
+- `dist/Monospire-<version>-arm64.dmg.blockmap`
 - `dist/latest-mac.yml`
 - `homebrew/Casks/monospire.rb`
-- `homebrew/Casks/Monospire.dmg/Monospire-1.2.4-arm64.dmg`
+- `homebrew/Casks/Monospire.dmg/Monospire-<version>-arm64.dmg`
 
 If local Apple signing identities are ambiguous or unavailable, build with ad-hoc signing:
 
@@ -222,8 +230,8 @@ homebrew/Casks/Monospire.dmg/
 ## Release Checklist
 
 1. Update `package.json` version and `build.buildVersion`.
-2. Run `npm run dist:mac`.
+2. Run `npm run release:mac`.
 3. Confirm `homebrew/Casks/monospire.rb` has the expected version, URL, and SHA256.
-4. Publish `dist/Monospire-<version>-arm64.dmg` to the matching GitHub release tag.
+4. Confirm the matching GitHub release has `Monospire-<version>-arm64.dmg` and `.dmg.blockmap`.
 5. Confirm the Gitea Linux build has uploaded the `.AppImage`, `.deb`, `.rpm`, and `.tar.xz` assets to the matching GitHub release tag.
 6. Commit the source changes and updated Homebrew cask files.
