@@ -74,7 +74,7 @@ if [[ -z "${DMG_PATH}" ]]; then
 fi
 
 if [[ -z "${DMG_URL}" ]]; then
-  DMG_URL="https://github.com/CurzonMonroe/Monospire/releases/download/v${APP_VERSION}/Monospire-${APP_VERSION}-arm64.dmg"
+  DMG_URL='https://github.com/CurzonMonroe/Monospire/releases/download/v#{version}/Monospire-#{version}-arm64.dmg'
 fi
 
 if [[ ! -f "${DMG_PATH}" ]]; then
@@ -96,7 +96,7 @@ cask "monospire" do
   desc "A focused Markdown editor"
   homepage "${HOMEPAGE_URL}"
 
-  depends_on macos: ">= :ventura"
+  depends_on macos: ">= :big_sur"
 
   app "Monospire.app"
   binary "#{appdir}/Monospire.app/Contents/Resources/app/scripts/monospire-cli", target: "monospire"
