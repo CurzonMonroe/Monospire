@@ -38,11 +38,22 @@ Linux packages are published on the GitHub release page:
 https://github.com/CurzonMonroe/Monospire/releases/tag/v1.2.4
 ```
 
-The current Linux packages are ARM64 builds. On an ARM64 Linux machine, install with the package format used by your distribution.
+Linux packages are published for x64 and ARM64. Use the package that matches your machine:
+
+```bash
+uname -m
+```
+
+Use `x64`/`amd64`/`x86_64` packages on normal Intel or AMD Linux machines. Use `arm64`/`aarch64` packages on ARM64 Linux machines.
 
 Debian and Ubuntu:
 
 ```bash
+# Intel/AMD x64
+wget https://github.com/CurzonMonroe/Monospire/releases/download/v1.2.4/monospire_1.2.4_amd64.deb
+sudo apt install ./monospire_1.2.4_amd64.deb
+
+# ARM64
 wget https://github.com/CurzonMonroe/Monospire/releases/download/v1.2.4/monospire_1.2.4_arm64.deb
 sudo apt install ./monospire_1.2.4_arm64.deb
 ```
@@ -50,6 +61,11 @@ sudo apt install ./monospire_1.2.4_arm64.deb
 Fedora:
 
 ```bash
+# Intel/AMD x64
+wget https://github.com/CurzonMonroe/Monospire/releases/download/v1.2.4/monospire-1.2.4.x86_64.rpm
+sudo dnf install ./monospire-1.2.4.x86_64.rpm
+
+# ARM64
 wget https://github.com/CurzonMonroe/Monospire/releases/download/v1.2.4/monospire-1.2.4.aarch64.rpm
 sudo dnf install ./monospire-1.2.4.aarch64.rpm
 ```
@@ -57,6 +73,11 @@ sudo dnf install ./monospire-1.2.4.aarch64.rpm
 RHEL, CentOS, Rocky Linux, and AlmaLinux:
 
 ```bash
+# Intel/AMD x64
+wget https://github.com/CurzonMonroe/Monospire/releases/download/v1.2.4/monospire-1.2.4.x86_64.rpm
+sudo dnf install ./monospire-1.2.4.x86_64.rpm
+
+# ARM64
 wget https://github.com/CurzonMonroe/Monospire/releases/download/v1.2.4/monospire-1.2.4.aarch64.rpm
 sudo dnf install ./monospire-1.2.4.aarch64.rpm
 ```
@@ -64,6 +85,11 @@ sudo dnf install ./monospire-1.2.4.aarch64.rpm
 openSUSE:
 
 ```bash
+# Intel/AMD x64
+wget https://github.com/CurzonMonroe/Monospire/releases/download/v1.2.4/monospire-1.2.4.x86_64.rpm
+sudo zypper install ./monospire-1.2.4.x86_64.rpm
+
+# ARM64
 wget https://github.com/CurzonMonroe/Monospire/releases/download/v1.2.4/monospire-1.2.4.aarch64.rpm
 sudo zypper install ./monospire-1.2.4.aarch64.rpm
 ```
@@ -71,6 +97,12 @@ sudo zypper install ./monospire-1.2.4.aarch64.rpm
 AppImage, for distributions where a package install is not preferred:
 
 ```bash
+# Intel/AMD x64
+wget https://github.com/CurzonMonroe/Monospire/releases/download/v1.2.4/Monospire-1.2.4.AppImage
+chmod +x Monospire-1.2.4.AppImage
+./Monospire-1.2.4.AppImage
+
+# ARM64
 wget https://github.com/CurzonMonroe/Monospire/releases/download/v1.2.4/Monospire-1.2.4-arm64.AppImage
 chmod +x Monospire-1.2.4-arm64.AppImage
 ./Monospire-1.2.4-arm64.AppImage
@@ -79,6 +111,12 @@ chmod +x Monospire-1.2.4-arm64.AppImage
 Portable tarball:
 
 ```bash
+# Intel/AMD x64
+wget https://github.com/CurzonMonroe/Monospire/releases/download/v1.2.4/monospire-1.2.4.tar.xz
+tar -xf monospire-1.2.4.tar.xz
+./monospire
+
+# ARM64
 wget https://github.com/CurzonMonroe/Monospire/releases/download/v1.2.4/monospire-1.2.4-arm64.tar.xz
 tar -xf monospire-1.2.4-arm64.tar.xz
 ./monospire

@@ -9,7 +9,7 @@
     "pack:app": "bash ./scripts/package-app.sh",
     "pack:mac": "electron-builder --mac --dir",
     "dist:mac": "electron-builder --mac && npm run brew:cask",
-    "dist:linux": "electron-builder --linux AppImage deb rpm tar.xz --publish never",
+    "dist:linux": "electron-builder --linux AppImage deb rpm tar.xz --x64 --arm64 --publish never",
     "brew:cask": "bash ./scripts/generate-homebrew-cask.sh"
   },
   "keywords": [
