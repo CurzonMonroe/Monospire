@@ -99,7 +99,7 @@ cask "monospire" do
   depends_on macos: ">= :ventura"
 
   app "Monospire.app"
-  binary "#{appdir}/Monospire.app/Contents/MacOS/Monospire", target: "monospire"
+  binary "#{appdir}/Monospire.app/Contents/Resources/app/scripts/monospire-cli", target: "monospire"
 
   zap trash: [
     "~/Library/Application Support/Monospire",

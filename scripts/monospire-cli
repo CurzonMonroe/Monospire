@@ -1,0 +1,41 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+SOURCE="${BASH_SOURCE[0]}"
+while [[ -L "${SOURCE}" ]]; do
+  DIR="$(cd -P "$(dirname "${SOURCE}")" >/dev/null && pwd)"
+  SOURCE="$(readlink "${SOURCE}")"
+  [[ "${SOURCE}" != /* ]] && SOURCE="${DIR}/${SOURCE}"
+done
+
+SCRIPT_DIR="$(cd -P "$(dirname "${SOURCE}")" >/dev/null && pwd)"
+BUNDLED_APP_PATH="$(cd "${SCRIPT_DIR}/../../../.." >/dev/null && pwd -P)"
+APP_PATH="${MONOSPIRE_APP_PATH:-${BUNDLED_APP_PATH}}"
+
+if [[ ! -d "${APP_PATH}/Contents" ]]; then
+  APP_PATH="/Applications/Monospire.app"
+fi
+
+if [[ ! -d "${APP_PATH}/Contents" ]]; then
+  echo "Monospire.app was not found. Set MONOSPIRE_APP_PATH or install Monospire in /Applications." >&2
+  exit 1
+fi
+
+if [[ "$#" -eq 0 ]]; then
+  open -a "${APP_PATH}"
+  exit 0
+fi
+
+all_existing_paths="true"
+for arg in "$@"; do
+  if [[ "${arg}" == -* || ! -e "${arg}" ]]; then
+    all_existing_paths="false"
+    break
+  fi
+done
+
+if [[ "${all_existing_paths}" == "true" ]]; then
+  open -a "${APP_PATH}" "$@"
+else
+  open -a "${APP_PATH}" --args "$@"
+fi
