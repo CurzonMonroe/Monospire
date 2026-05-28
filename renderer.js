@@ -1505,9 +1505,24 @@ function mergeFrontMatterWithBody(frontMatterBlock, body) {
   return `---\n${normalizedFrontMatter}\n---\n\n${normalizedBody}`;
 }
 
+function normalizeMarkdownBodyForParsing(source) {
+  return String(source || '')
+    .replace(/\r\n?/g, '\n')
+    .split('\n')
+    .map((line) => line.replace(
+      /^([ \t\u00A0\u200B\u200C\u200D\uFEFF]{0,3})(?=#{1,6}(?:\s|$))/,
+      (prefix) => prefix.replace(/\u00A0/g, ' ').replace(/[\u200B\u200C\u200D\uFEFF]/g, '')
+    ))
+    .join('\n');
+}
+
+function renderMarkdownBody(markdownBody, bodyLineOffset = 0) {
+  return md.render(normalizeMarkdownBodyForParsing(markdownBody), { bodyLineOffset: bodyLineOffset || 0 });
+}
+
 function buildOutlineFromMarkdown(source) {
   const split = splitFrontMatter(source);
-  const markdownBody = split.body;
+  const markdownBody = normalizeMarkdownBodyForParsing(split.body);
   const tokens = md.parse(markdownBody, {});
   const slugCounts = {};
   const items = [];
@@ -2716,7 +2731,7 @@ async function applyThemeVariantForMode() {
   setActiveThemeFromMode();
   await updateFrameCss();
   const split = splitFrontMatter(markdownState);
-  patchFrameHtml(md.render(split.body, { bodyLineOffset: split.bodyLineOffset || 0 }));
+  patchFrameHtml(renderMarkdownBody(split.body, split.bodyLineOffset));
   scheduleFrameMermaidRender();
   applyFrameTheme();
   applyFormattedZoom();
@@ -2861,7 +2876,7 @@ async function renderMarkdownForExport(markdown) {
   let html = '';
   renderingForExport = true;
   try {
-    html = md.render(split.body, { bodyLineOffset: split.bodyLineOffset || 0 });
+    html = renderMarkdownBody(split.body, split.bodyLineOffset);
   } finally {
     renderingForExport = false;
   }
@@ -2881,7 +2896,7 @@ function scheduleFormattedNormalization() {
     const doc = frame.contentDocument;
     if (!doc) return;
     const split = splitFrontMatter(markdownState);
-    patchFrameHtml(md.render(split.body, { bodyLineOffset: split.bodyLineOffset || 0 }));
+    patchFrameHtml(renderMarkdownBody(split.body, split.bodyLineOffset));
     scheduleFrameMermaidRender();
     applyFrameTheme();
     applyFormattedZoom();
@@ -2891,7 +2906,7 @@ function scheduleFormattedNormalization() {
 function renderFromMarkdown(source) {
   markdownState = source;
   const split = splitFrontMatter(markdownState);
-  const html = md.render(split.body, { bodyLineOffset: split.bodyLineOffset || 0 });
+  const html = renderMarkdownBody(split.body, split.bodyLineOffset);
 
   if (html !== lastRenderedHtml) {
     if (!suppressRawHandler && document.activeElement !== rawEditor) {
@@ -3196,7 +3211,7 @@ function applyHeadingShortcutInFormatted(event) {
   const range = selection.getRangeAt(0);
   const anchorNode = range.startContainer;
   const element = anchorNode.nodeType === Node.ELEMENT_NODE ? anchorNode : anchorNode.parentElement;
-  const block = element?.closest?.('p,div');
+  const block = element?.closest?.('p,div,h1,h2,h3,h4,h5,h6');
   if (!block) return false;
 
   const prefixRange = doc.createRange();
@@ -4890,7 +4905,7 @@ function wireEvents() {
     void updateFrameCss();
     applyFrameTheme();
     const split = splitFrontMatter(markdownState);
-    patchFrameHtml(md.render(split.body, { bodyLineOffset: split.bodyLineOffset || 0 }));
+    patchFrameHtml(renderMarkdownBody(split.body, split.bodyLineOffset));
     scheduleFrameMermaidRender();
     applyFormattedZoom();
     applySpellcheckSetting();
@@ -5124,7 +5139,7 @@ function bootstrap() {
     await loadSavedThemeOnStartup();
     diagnosticLog('renderer.startup.theme.loaded');
     const split = splitFrontMatter(markdownState);
-    patchFrameHtml(md.render(split.body, { bodyLineOffset: split.bodyLineOffset || 0 }));
+    patchFrameHtml(renderMarkdownBody(split.body, split.bodyLineOffset));
     scheduleFrameMermaidRender();
     applyFormattedZoom();
     updateThemeDebug();

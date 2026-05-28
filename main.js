@@ -654,8 +654,7 @@ function buildEditorFontSubmenu() {
 function resolveAppIconPath() {
   const candidates = [
     path.join(__dirname, 'assets', 'Monospire.icns'),
-    path.join(__dirname, 'assets', 'monospire-icon-1024.png'),
-    path.join(__dirname, 'assets', 'monospire-icon.svg')
+    path.join(__dirname, 'assets', 'monospire-icon-1024.png')
   ];
 
   for (const candidate of candidates) {
@@ -667,8 +666,7 @@ function resolveAppIconPath() {
 function resolveAboutIconPath() {
   const candidates = [
     path.join(__dirname, 'assets', 'monospire-icon-1024.png'),
-    path.join(__dirname, 'assets', 'Monospire.icns'),
-    path.join(__dirname, 'assets', 'monospire-icon.svg')
+    path.join(__dirname, 'assets', 'Monospire.icns')
   ];
 
   for (const candidate of candidates) {
@@ -680,8 +678,7 @@ function resolveAboutIconPath() {
 function resolveDockIconPath() {
   const candidates = [
     path.join(__dirname, 'assets', 'monospire-icon-1024.png'),
-    path.join(__dirname, 'assets', 'Monospire.icns'),
-    path.join(__dirname, 'assets', 'monospire-icon.svg')
+    path.join(__dirname, 'assets', 'Monospire.icns')
   ];
 
   for (const candidate of candidates) {
