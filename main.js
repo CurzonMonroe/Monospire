@@ -14,14 +14,11 @@ const { execFile } = require('child_process');
 
 app.setName('Monospire');
 let recentFilesCache = [];
-let editorFontMenuFamilies = [];
-let selectedEditorFontFamily = '';
 const windowSessionState = new Map();
 let isQuittingForSessionPersist = false;
 let diagnosticsPathCache = null;
 const diagnosticsTmpPath = path.join(os.tmpdir(), 'monospire-diagnostics.log');
 let mermaidWorkerWindow = null;
-let aboutWindow = null;
 let mermaidWorkerReady = false;
 let mermaidWorkerLoadingPromise = null;
 const mermaidPendingRequests = new Map();
@@ -48,8 +45,6 @@ const MIN_WINDOW_BOUNDS = {
   width: 980,
   height: 660
 };
-const DEFAULT_EDITOR_FONT_FAMILY = 'ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace';
-let installedFontFamiliesCache = null;
 
 function getDiagnosticsPath() {
   if (diagnosticsPathCache) return diagnosticsPathCache;
@@ -178,103 +173,6 @@ function runExecFile(command, args, options = {}) {
       });
     });
   });
-}
-
-function normalizeFontFamilyName(value) {
-  return String(value || '')
-    .trim()
-    .replace(/^["']|["']$/g, '')
-    .replace(/\s+/g, ' ');
-}
-
-function uniqueSortedFontFamilies(families) {
-  const seen = new Set();
-  const output = [];
-  for (const item of families || []) {
-    const family = normalizeFontFamilyName(item);
-    const key = family.toLowerCase();
-    if (!family || seen.has(key)) continue;
-    seen.add(key);
-    output.push(family);
-  }
-  return output.sort((a, b) => a.localeCompare(b, undefined, { sensitivity: 'base' }));
-}
-
-async function listMacFontFamilies() {
-  const { stdout } = await runExecFile('system_profiler', ['SPFontsDataType', '-json'], {
-    timeout: 20000,
-    maxBuffer: 20 * 1024 * 1024
-  });
-  const parsed = JSON.parse(stdout);
-  const items = Array.isArray(parsed?.SPFontsDataType) ? parsed.SPFontsDataType : [];
-  const families = [];
-  for (const item of items) {
-    const typefaces = Array.isArray(item?.typefaces) ? item.typefaces : [];
-    for (const face of typefaces) {
-      families.push(face?.family || face?._name || face?.fullname);
-    }
-  }
-  return uniqueSortedFontFamilies(families);
-}
-
-async function listLinuxFontFamilies() {
-  const { stdout } = await runExecFile('fc-list', [':', 'family'], {
-    timeout: 10000,
-    maxBuffer: 10 * 1024 * 1024
-  });
-  const families = [];
-  for (const line of stdout.split('\n')) {
-    for (const family of line.split(',')) {
-      families.push(family);
-    }
-  }
-  return uniqueSortedFontFamilies(families);
-}
-
-async function listWindowsFontFamilies() {
-  const command = [
-    '$shell = New-Object -ComObject Shell.Application;',
-    '$folder = $shell.Namespace(0x14);',
-    '$folder.Items() | ForEach-Object { $folder.GetDetailsOf($_, 21) } | Where-Object { $_ }'
-  ].join(' ');
-  const { stdout } = await runExecFile('powershell.exe', ['-NoProfile', '-Command', command], {
-    timeout: 15000,
-    maxBuffer: 10 * 1024 * 1024
-  });
-  return uniqueSortedFontFamilies(stdout.split('\n'));
-}
-
-async function listInstalledFontFamilies() {
-  if (installedFontFamiliesCache) return installedFontFamiliesCache;
-  const fallback = uniqueSortedFontFamilies([
-    'SF Mono',
-    'Menlo',
-    'Monaco',
-    'Courier New',
-    'Consolas',
-    'Liberation Mono',
-    'DejaVu Sans Mono',
-    'Ubuntu Mono'
-  ]);
-  try {
-    if (process.platform === 'darwin') installedFontFamiliesCache = await listMacFontFamilies();
-    else if (process.platform === 'linux') installedFontFamiliesCache = await listLinuxFontFamilies();
-    else if (process.platform === 'win32') installedFontFamiliesCache = await listWindowsFontFamilies();
-    else installedFontFamiliesCache = fallback;
-  } catch (error) {
-    logDiagnostics('fonts.list.error', { error });
-    installedFontFamiliesCache = fallback;
-  }
-  if (!installedFontFamiliesCache || installedFontFamiliesCache.length === 0) {
-    installedFontFamiliesCache = fallback;
-  }
-  return installedFontFamiliesCache;
-}
-
-function normalizeEditorFontFamily(value) {
-  const family = normalizeFontFamilyName(value);
-  if (!family || family.length > 160) return DEFAULT_EDITOR_FONT_FAMILY;
-  return family;
 }
 
 async function convertDocxToPages(sourceDocxPath, targetPagesPath) {
@@ -571,6 +469,11 @@ function normalizeSingleWindowSession(input) {
     previewScrollTop: Number.isFinite(input.previewScrollTop) ? Math.max(0, Number(input.previewScrollTop)) : 0,
     showRaw: input.showRaw !== false,
     showFormatted: input.showFormatted !== false,
+    showMindmap: input.showMindmap === true,
+    mindmapZoom: Number.isFinite(input.mindmapZoom) ? Math.max(0.35, Math.min(2.4, Number(input.mindmapZoom))) : 1,
+    mindmapLayout: ['right', 'left', 'vertical', 'radial'].includes(input.mindmapLayout) ? input.mindmapLayout : 'balanced',
+    mindmapScrollLeft: Number.isFinite(input.mindmapScrollLeft) ? Math.max(0, Number(input.mindmapScrollLeft)) : 0,
+    mindmapScrollTop: Number.isFinite(input.mindmapScrollTop) ? Math.max(0, Number(input.mindmapScrollTop)) : 0,
     splitOrientation: input.splitOrientation === 'vertical' ? 'vertical' : 'horizontal',
     lastSavedAt: typeof input.lastSavedAt === 'string' ? input.lastSavedAt : null,
     docSessionKey: typeof input.docSessionKey === 'string' ? input.docSessionKey : ''
@@ -620,53 +523,12 @@ function buildOpenRecentSubmenu() {
   return submenu;
 }
 
-function buildEditorFontSubmenu() {
-  const families = Array.isArray(editorFontMenuFamilies) ? editorFontMenuFamilies : [];
-  const submenu = [
-    {
-      id: 'editor-font-system',
-      label: 'System Mono',
-      type: 'radio',
-      checked: selectedEditorFontFamily === '',
-      click: () => sendMenuAction('set-editor-font-family', { family: '' })
-    }
-  ];
-
-  if (families.length > 0) {
-    submenu.push({ type: 'separator' });
-    for (const family of families) {
-      submenu.push({
-        id: `editor-font-${crypto.createHash('sha1').update(family).digest('hex').slice(0, 12)}`,
-        label: family,
-        type: 'radio',
-        checked: selectedEditorFontFamily === family,
-        click: () => sendMenuAction('set-editor-font-family', { family })
-      });
-    }
-  } else {
-    submenu.push({ type: 'separator' });
-    submenu.push({ label: 'Loading Fonts...', enabled: false });
-  }
-
-  return submenu;
-}
-
 function resolveAppIconPath() {
   const candidates = [
-    path.join(__dirname, 'assets', 'Monospire.icns'),
-    path.join(__dirname, 'assets', 'monospire-icon-1024.png')
-  ];
-
-  for (const candidate of candidates) {
-    if (fsSync.existsSync(candidate)) return candidate;
-  }
-  return null;
-}
-
-function resolveAboutIconPath() {
-  const candidates = [
+    path.join(__dirname, 'assets', 'monospire-icon-option10-transparent.png'),
     path.join(__dirname, 'assets', 'monospire-icon-1024.png'),
-    path.join(__dirname, 'assets', 'Monospire.icns')
+    path.join(__dirname, 'assets', 'Monospire.icns'),
+    path.join(__dirname, 'assets', 'monospire-icon.svg')
   ];
 
   for (const candidate of candidates) {
@@ -677,8 +539,10 @@ function resolveAboutIconPath() {
 
 function resolveDockIconPath() {
   const candidates = [
+    path.join(__dirname, 'assets', 'monospire-icon-option10-transparent.png'),
     path.join(__dirname, 'assets', 'monospire-icon-1024.png'),
-    path.join(__dirname, 'assets', 'Monospire.icns')
+    path.join(__dirname, 'assets', 'Monospire.icns'),
+    path.join(__dirname, 'assets', 'monospire-icon.svg')
   ];
 
   for (const candidate of candidates) {
@@ -697,188 +561,195 @@ function applyDockIcon() {
   }
 }
 
-function configureAboutPanel() {
-  const iconPath = resolveAboutIconPath();
-  const version = app.getVersion();
-  const options = {
-    applicationName: 'Monospire',
-    applicationVersion: version,
-    version: `Build ${version}`,
-    copyright: 'Copyright 2026 Curzon Monroe',
-    credits: [
-      'A focused Markdown editor',
-      '',
-      `Electron ${process.versions.electron}`,
-      `Chromium ${process.versions.chrome}`,
-      `Node.js ${process.versions.node}`
-    ].join('\n')
-  };
-  if (iconPath) options.iconPath = iconPath;
-  try {
-    app.setAboutPanelOptions(options);
-  } catch (error) {
-    logDiagnostics('about.configure.error', { error });
-  }
-}
-
 function escapeHtml(value) {
-  return String(value ?? '')
+  return String(value || '')
     .replace(/&/g, '&amp;')
     .replace(/</g, '&lt;')
     .replace(/>/g, '&gt;')
-    .replace(/"/g, '&quot;')
-    .replace(/'/g, '&#39;');
+    .replace(/"/g, '&quot;');
 }
 
-function showAboutWindow(parentWindow = null) {
-  if (aboutWindow && !aboutWindow.isDestroyed()) {
-    aboutWindow.focus();
-    return;
+function imageFileToDataUrl(filePath) {
+  try {
+    if (!filePath || !fsSync.existsSync(filePath)) return '';
+    const extension = path.extname(filePath).toLowerCase();
+    const mime = extension === '.svg'
+      ? 'image/svg+xml'
+      : extension === '.icns'
+        ? ''
+        : 'image/png';
+    if (!mime) return '';
+    const data = fsSync.readFileSync(filePath).toString('base64');
+    return `data:${mime};base64,${data}`;
+  } catch (error) {
+    logDiagnostics('about.icon.data-url.error', { error: String(error?.message || error || 'unknown') });
+    return '';
   }
+}
 
-  const appIconPath = resolveAppIconPath();
-  const aboutIconPath = resolveAboutIconPath();
-  const aboutIcon = aboutIconPath ? nativeImage.createFromPath(aboutIconPath) : null;
-  const iconDataUrl = aboutIcon && !aboutIcon.isEmpty() ? aboutIcon.resize({ width: 112, height: 112, quality: 'best' }).toDataURL() : '';
+function showAboutWindow(parentWindow) {
   const version = app.getVersion();
+  const iconPath = resolveAppIconPath();
+  const iconUrl = imageFileToDataUrl(iconPath);
+  const aboutWindow = new BrowserWindow({
+    width: 432,
+    height: 393,
+    resizable: false,
+    minimizable: false,
+    maximizable: false,
+    fullscreenable: false,
+    modal: false,
+    parent: parentWindow || undefined,
+    show: false,
+    frame: false,
+    transparent: true,
+    backgroundColor: '#00000000',
+    title: 'About Monospire',
+    webPreferences: {
+      nodeIntegration: false,
+      contextIsolation: true,
+      sandbox: true
+    }
+  });
+  let didShow = false;
+  const showOnce = () => {
+    if (didShow || aboutWindow.isDestroyed()) return;
+    didShow = true;
+    aboutWindow.show();
+    aboutWindow.focus();
+  };
+
+  const fallbackTimer = setTimeout(showOnce, 800);
+  aboutWindow.on('closed', () => clearTimeout(fallbackTimer));
+  aboutWindow.on('blur', () => {
+    setTimeout(() => {
+      if (!aboutWindow.isDestroyed() && !aboutWindow.isFocused()) {
+        aboutWindow.close();
+      }
+    }, 80);
+  });
+  aboutWindow.webContents.on('before-input-event', (_event, input) => {
+    if (input.key === 'Escape' || input.key === 'Enter') {
+      aboutWindow.close();
+    }
+  });
+
   const html = `<!doctype html>
 <html>
   <head>
     <meta charset="utf-8" />
-    <title>About Monospire</title>
     <style>
-      :root { color-scheme: light dark; }
-      * { box-sizing: border-box; }
-      body {
+      :root { color-scheme: light; }
+      html, body {
         margin: 0;
-        min-height: 100vh;
-        display: grid;
-        place-items: center;
-        background: linear-gradient(180deg, #f8f8fb 0%, #eceef5 100%);
-        color: #202329;
-        font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Helvetica Neue", sans-serif;
-      }
-      main {
         width: 100%;
-        padding: 26px 30px 22px;
-        text-align: center;
+        height: 100%;
+        overflow: hidden;
+        font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Helvetica Neue", Arial, sans-serif;
+        background: transparent;
+        user-select: none;
       }
-      img {
-        width: 112px;
-        height: 112px;
-        display: block;
-        margin: 0 auto 12px;
-        border-radius: 24px;
+      .panel {
+        width: 430px;
+        height: 391px;
+        margin: 1px;
+        border: 1px solid rgba(0,0,0,.24);
+        border-radius: 10px;
+        background: #f6f7fb;
+        box-shadow: 0 18px 46px rgba(0,0,0,.24);
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        color: #20232b;
+      }
+      .icon {
+        width: 114px;
+        height: 114px;
+        margin-top: 26px;
+        object-fit: contain;
       }
       h1 {
-        margin: 0;
+        margin: 10px 0 6px;
         font-size: 26px;
-        line-height: 1.15;
-        font-weight: 750;
+        line-height: 1.08;
+        font-weight: 800;
+        letter-spacing: 0;
       }
       .tagline {
-        margin: 7px 0 14px;
-        color: #5e6674;
+        margin: 0 0 14px;
+        color: #596273;
         font-size: 14px;
       }
-      .meta {
-        display: inline-grid;
-        gap: 4px;
-        min-width: 250px;
+      .versions {
+        width: 248px;
         padding: 10px 14px;
-        border: 1px solid #d7dbe4;
-        border-radius: 10px;
-        background: rgba(255, 255, 255, 0.66);
-        color: #4f5868;
-        font-size: 12px;
-        text-align: left;
+        border: 1px solid #d6dce8;
+        border-radius: 9px;
+        background: rgba(255,255,255,.72);
+        display: grid;
+        grid-template-columns: 1fr auto;
+        row-gap: 5px;
+        font-size: 13px;
       }
-      .meta div {
-        display: flex;
-        justify-content: space-between;
-        gap: 18px;
+      .versions dt {
+        color: #6b7486;
       }
-      .meta span:first-child {
-        color: #798292;
+      .versions dd {
+        margin: 0;
+        color: #465164;
+        font-weight: 700;
+        text-align: right;
       }
       .copyright {
-        margin: 14px 0 0;
-        color: #7b8493;
+        margin-top: 14px;
+        color: #758092;
         font-size: 11px;
       }
       button {
         margin-top: 16px;
         min-width: 76px;
-        border: 1px solid #c9ced9;
-        border-radius: 8px;
-        background: #ffffff;
-        color: #202329;
-        font: inherit;
+        height: 30px;
+        border: 2px solid #ffae00;
+        border-radius: 9px;
+        background: #fff;
+        color: #20232b;
         font-size: 13px;
-        padding: 6px 14px;
       }
-      button:active { background: #eef2f8; }
-      @media (prefers-color-scheme: dark) {
-        body {
-          background: linear-gradient(180deg, #22262e 0%, #191c22 100%);
-          color: #f2f4f8;
-        }
-        .tagline { color: #b9c0cc; }
-        .meta {
-          border-color: #3d4350;
-          background: rgba(17, 20, 26, 0.62);
-          color: #c4cad5;
-        }
-        .meta span:first-child,
-        .copyright { color: #8f98a8; }
-        button {
-          border-color: #4a5060;
-          background: #2b303a;
-          color: #f2f4f8;
-        }
+      button:focus {
+        outline: none;
+        box-shadow: 0 0 0 2px rgba(255,174,0,.25);
       }
     </style>
   </head>
   <body>
-    <main>
-      ${iconDataUrl ? `<img src="${iconDataUrl}" alt="" />` : ''}
+    <main class="panel">
+      ${iconUrl ? `<img class="icon" src="${iconUrl}" alt="" />` : ''}
       <h1>Monospire</h1>
       <p class="tagline">A focused Markdown editor</p>
-      <section class="meta" aria-label="Version information">
-        <div><span>Version</span><strong>${escapeHtml(version)}</strong></div>
-        <div><span>Electron</span><strong>${escapeHtml(process.versions.electron)}</strong></div>
-        <div><span>Chromium</span><strong>${escapeHtml(process.versions.chrome)}</strong></div>
-        <div><span>Node.js</span><strong>${escapeHtml(process.versions.node)}</strong></div>
-      </section>
-      <p class="copyright">Copyright 2026 Curzon Monroe</p>
-      <button autofocus onclick="window.close()">OK</button>
+      <dl class="versions">
+        <dt>Version</dt><dd>${escapeHtml(version)}</dd>
+        <dt>Electron</dt><dd>${escapeHtml(process.versions.electron)}</dd>
+        <dt>Chromium</dt><dd>${escapeHtml(process.versions.chrome)}</dd>
+        <dt>Node.js</dt><dd>${escapeHtml(process.versions.node)}</dd>
+      </dl>
+      <div class="copyright">Copyright 2026 Curzon Monroe</div>
+      <button id="close-button" autofocus>OK</button>
     </main>
+    <script>
+      document.getElementById('close-button').addEventListener('click', () => window.close());
+      window.addEventListener('keydown', (event) => {
+        if (event.key === 'Escape' || event.key === 'Enter') window.close();
+      });
+    </script>
   </body>
 </html>`;
 
-  aboutWindow = new BrowserWindow({
-    width: 430,
-    height: 420,
-    resizable: false,
-    minimizable: false,
-    maximizable: false,
-    fullscreenable: false,
-    title: 'About Monospire',
-    parent: parentWindow || undefined,
-    modal: Boolean(parentWindow),
-    backgroundColor: nativeTheme.shouldUseDarkColors ? '#191c22' : '#f2f3f7',
-    ...(appIconPath ? { icon: appIconPath } : {}),
-    webPreferences: {
-      contextIsolation: true,
-      nodeIntegration: false
-    }
+  aboutWindow.loadURL(`data:text/html;charset=utf-8,${encodeURIComponent(html)}`).catch((error) => {
+    logDiagnostics('about.window.load.error', { error: String(error?.message || error || 'unknown') });
+    showOnce();
   });
-
-  aboutWindow.on('closed', () => {
-    aboutWindow = null;
-  });
-  aboutWindow.setMenuBarVisibility(false);
-  aboutWindow.loadURL(`data:text/html;charset=utf-8,${encodeURIComponent(html)}`);
+  aboutWindow.once('ready-to-show', showOnce);
+  aboutWindow.webContents.once('did-finish-load', showOnce);
 }
 
 function buildAppMenu() {
@@ -895,6 +766,20 @@ function buildAppMenu() {
           label: 'New Window',
           accelerator: 'CmdOrCtrl+Shift+N',
           click: () => sendMenuAction('file-new-window')
+        },
+        {
+          label: 'New from Template...',
+          accelerator: 'Alt+CmdOrCtrl+N',
+          click: () => sendMenuAction('file-new-from-template')
+        },
+        { type: 'separator' },
+        {
+          label: 'Set Default Template...',
+          click: () => sendMenuAction('file-set-default-template')
+        },
+        {
+          label: 'Reset Default Template',
+          click: () => sendMenuAction('file-reset-default-template')
         },
         { type: 'separator' },
         {
@@ -915,6 +800,10 @@ function buildAppMenu() {
           label: 'Export...',
           accelerator: 'CmdOrCtrl+Shift+S',
           click: () => sendMenuAction('file-save-as')
+        },
+        {
+          label: 'Export Mindmap...',
+          click: () => sendMenuAction('export-mindmap-svg')
         },
         {
           label: 'Version History...',
@@ -968,6 +857,64 @@ function buildAppMenu() {
       label: 'View',
       submenu: [
         {
+          id: 'toggle-raw',
+          label: 'Show Markdown Editor',
+          type: 'checkbox',
+          checked: true,
+          click: (menuItem) => sendMenuAction('toggle-raw-view', { enabled: menuItem.checked })
+        },
+        {
+          id: 'toggle-formatted',
+          label: 'Show Preview',
+          type: 'checkbox',
+          checked: false,
+          click: (menuItem) => sendMenuAction('toggle-formatted-view', { enabled: menuItem.checked })
+        },
+        {
+          id: 'toggle-mindmap',
+          label: 'Show Mindmap',
+          type: 'checkbox',
+          checked: false,
+          click: (menuItem) => sendMenuAction('set-mindmap-view', { enabled: menuItem.checked })
+        },
+        {
+          label: 'MindMap Layout',
+          submenu: [
+            {
+              id: 'mindmap-layout-balanced',
+              label: 'Balanced',
+              type: 'radio',
+              checked: true,
+              click: () => sendMenuAction('set-mindmap-layout', { layout: 'balanced' })
+            },
+            {
+              id: 'mindmap-layout-right',
+              label: 'Right',
+              type: 'radio',
+              click: () => sendMenuAction('set-mindmap-layout', { layout: 'right' })
+            },
+            {
+              id: 'mindmap-layout-left',
+              label: 'Left',
+              type: 'radio',
+              click: () => sendMenuAction('set-mindmap-layout', { layout: 'left' })
+            },
+            {
+              id: 'mindmap-layout-vertical',
+              label: 'Vertical',
+              type: 'radio',
+              click: () => sendMenuAction('set-mindmap-layout', { layout: 'vertical' })
+            },
+            {
+              id: 'mindmap-layout-radial',
+              label: 'Radial',
+              type: 'radio',
+              click: () => sendMenuAction('set-mindmap-layout', { layout: 'radial' })
+            }
+          ]
+        },
+        { type: 'separator' },
+        {
           label: 'Zoom',
           submenu: [
             {
@@ -985,23 +932,17 @@ function buildAppMenu() {
                 { label: 'Zoom Out', click: () => sendMenuAction('zoom-formatted-out') },
                 { label: 'Reset Zoom', click: () => sendMenuAction('zoom-formatted-reset') }
               ]
+            },
+            {
+              label: 'Mindmap',
+              submenu: [
+                { label: 'Zoom In', click: () => sendMenuAction('zoom-mindmap-in') },
+                { label: 'Zoom Out', click: () => sendMenuAction('zoom-mindmap-out') },
+                { label: 'Reset Zoom', click: () => sendMenuAction('zoom-mindmap-reset') },
+                { label: 'Fit to View', click: () => sendMenuAction('zoom-mindmap-fit') }
+              ]
             }
           ]
-        },
-        { type: 'separator' },
-        {
-          id: 'toggle-raw',
-          label: 'Show Markdown Editor',
-          type: 'checkbox',
-          checked: true,
-          click: (menuItem) => sendMenuAction('toggle-raw-view', { enabled: menuItem.checked })
-        },
-        {
-          id: 'toggle-formatted',
-          label: 'Show Preview',
-          type: 'checkbox',
-          checked: false,
-          click: (menuItem) => sendMenuAction('toggle-formatted-view', { enabled: menuItem.checked })
         },
         { type: 'separator' },
         {
@@ -1065,7 +1006,11 @@ function buildAppMenu() {
     {
       label: 'Tools',
       submenu: [
-        { label: 'Document Metadata...', accelerator: 'CmdOrCtrl+M', click: () => sendMenuAction('edit-front-matter') },
+        {
+          label: 'Document Metadata...',
+          accelerator: 'CmdOrCtrl+M',
+          click: () => sendMenuAction('edit-front-matter')
+        },
         { label: 'Check Links...', click: () => sendMenuAction('check-links') },
         { type: 'separator' },
         {
@@ -1087,19 +1032,9 @@ function buildAppMenu() {
         {
           label: 'Templates',
           submenu: [
-            {
-              label: 'New from Template...',
-              accelerator: 'Alt+CmdOrCtrl+N',
-              click: () => sendMenuAction('file-new-from-template')
-            },
-            {
-              label: 'Set Default Template...',
-              click: () => sendMenuAction('file-set-default-template')
-            },
-            {
-              label: 'Reset Default Template',
-              click: () => sendMenuAction('file-reset-default-template')
-            }
+            { label: 'New from Template...', click: () => sendMenuAction('file-new-from-template') },
+            { label: 'Set Default Template...', click: () => sendMenuAction('file-set-default-template') },
+            { label: 'Reset Default Template', click: () => sendMenuAction('file-reset-default-template') }
           ]
         },
         { type: 'separator' },
@@ -1205,7 +1140,11 @@ function buildAppMenu() {
           ]
         },
         { type: 'separator' },
-        { label: 'Settings...', accelerator: 'CmdOrCtrl+,', click: () => sendMenuAction('open-settings') },
+        {
+          label: 'Settings...',
+          accelerator: 'CmdOrCtrl+,',
+          click: () => sendMenuAction('open-keybindings')
+        },
         { label: 'About Monospire', click: () => sendMenuAction('show-about') }
       ]
     }
@@ -1214,7 +1153,7 @@ function buildAppMenu() {
   if (process.platform === 'darwin') {
     template.unshift({
       label: 'Monospire',
-      submenu: [{ label: 'About Monospire', click: () => showAboutWindow(BrowserWindow.getFocusedWindow()) }, { type: 'separator' }, { role: 'services' }, { type: 'separator' }, { role: 'hide' }, { role: 'hideOthers' }, { role: 'unhide' }, { type: 'separator' }, { role: 'quit', label: 'Exit' }]
+      submenu: [{ label: 'About Monospire', click: () => sendMenuAction('show-about') }, { type: 'separator' }, { role: 'services' }, { type: 'separator' }, { role: 'hide' }, { role: 'hideOthers' }, { role: 'unhide' }, { type: 'separator' }, { role: 'quit', label: 'Exit' }]
     });
   }
 
@@ -1267,6 +1206,57 @@ async function exportMarkdownPdf(filePath, payload) {
       printBackground: true,
       margins: { top: 0.5, bottom: 0.5, left: 0.5, right: 0.5 },
       pageSize: 'A4'
+    });
+    await fs.writeFile(filePath, pdfData);
+  } finally {
+    if (!pdfWindow.isDestroyed()) {
+      pdfWindow.destroy();
+    }
+  }
+}
+
+async function exportMindmapPdf(filePath, svg) {
+  const pdfWindow = new BrowserWindow({
+    show: false,
+    width: 1200,
+    height: 900,
+    webPreferences: {
+      sandbox: true
+    }
+  });
+
+  const printableHtml = `<!doctype html>
+<html>
+  <head>
+    <meta charset="utf-8" />
+    <style>
+      html, body {
+        margin: 0;
+        padding: 0;
+        background: #ffffff;
+      }
+      body {
+        min-height: 100vh;
+        display: grid;
+        place-items: center;
+      }
+      svg {
+        max-width: calc(100vw - 48px);
+        max-height: calc(100vh - 48px);
+        height: auto;
+      }
+    </style>
+  </head>
+  <body>${svg}</body>
+</html>`;
+
+  try {
+    await pdfWindow.loadURL(`data:text/html;charset=utf-8,${encodeURIComponent(printableHtml)}`);
+    const pdfData = await pdfWindow.webContents.printToPDF({
+      printBackground: true,
+      margins: { top: 0.4, bottom: 0.4, left: 0.4, right: 0.4 },
+      pageSize: 'A4',
+      landscape: true
     });
     await fs.writeFile(filePath, pdfData);
   } finally {
@@ -2099,28 +2089,6 @@ ipcMain.handle('load-line-numbers-preference', async () => {
   return { loaded: true, enabled: settings.lineNumbers };
 });
 
-ipcMain.handle('list-installed-font-families', async () => {
-  const families = await listInstalledFontFamilies();
-  return { loaded: true, families };
-});
-
-ipcMain.handle('save-editor-font-preference', async (_event, payload) => {
-  const settings = await readSettings();
-  const family = normalizeFontFamilyName(payload?.family);
-  settings.editorFontFamily = family ? normalizeEditorFontFamily(family) : null;
-  await writeSettings(settings);
-  return { saved: true };
-});
-
-ipcMain.handle('load-editor-font-preference', async () => {
-  const settings = await readSettings();
-  const family = normalizeFontFamilyName(settings.editorFontFamily);
-  if (!family || family === DEFAULT_EDITOR_FONT_FAMILY || family.includes(',')) {
-    return { loaded: false, family: DEFAULT_EDITOR_FONT_FAMILY };
-  }
-  return { loaded: true, family: normalizeEditorFontFamily(family) };
-});
-
 ipcMain.handle('save-mermaid-preview-preference', async (_event, payload) => {
   const settings = await readSettings();
   settings.mermaidPreviewEnabled = payload?.enabled === true;
@@ -2134,6 +2102,64 @@ ipcMain.handle('load-mermaid-preview-preference', async () => {
     return { loaded: false, enabled: false };
   }
   return { loaded: true, enabled: settings.mermaidPreviewEnabled };
+});
+
+ipcMain.handle('save-mindmap-preference', async (_event, payload) => {
+  const settings = await readSettings();
+  settings.mindmapEnabled = payload?.enabled === true;
+  settings.mindmapLayout = ['right', 'left', 'vertical', 'radial'].includes(payload?.layout) ? payload.layout : 'balanced';
+  await writeSettings(settings);
+  return { saved: true };
+});
+
+ipcMain.handle('load-mindmap-preference', async () => {
+  const settings = await readSettings();
+  if (typeof settings.mindmapEnabled !== 'boolean') {
+    return { loaded: false, enabled: false, layout: 'balanced' };
+  }
+  const layout = ['right', 'left', 'vertical', 'radial'].includes(settings.mindmapLayout)
+    ? settings.mindmapLayout
+    : 'balanced';
+  return { loaded: true, enabled: settings.mindmapEnabled, layout };
+});
+
+ipcMain.handle('export-mindmap-svg', async (_event, payload) => {
+  const svg = typeof payload?.svg === 'string' ? payload.svg : '';
+  if (!svg.trim()) return { saved: false, error: 'No mindmap SVG is available to export.' };
+  const suggestedName = typeof payload?.suggestedName === 'string' && payload.suggestedName.trim()
+    ? payload.suggestedName.trim()
+    : 'mindmap';
+  const defaultPath = payload?.path
+    ? path.join(path.dirname(payload.path), suggestedName)
+    : suggestedName;
+  const result = await dialog.showSaveDialog({
+    title: 'Export Mindmap',
+    defaultPath,
+    filters: [
+      { name: 'SVG', extensions: ['svg'] },
+      { name: 'PDF', extensions: ['pdf'] }
+    ]
+  });
+  if (result.canceled || !result.filePath) return { saved: false };
+  const selectedExtension = path.extname(result.filePath).toLowerCase();
+  const outputPath = selectedExtension === '.svg' || selectedExtension === '.pdf'
+    ? result.filePath
+    : `${result.filePath}.svg`;
+  const outputExtension = path.extname(outputPath).toLowerCase();
+  try {
+    if (outputExtension === '.pdf') {
+      await exportMindmapPdf(outputPath, svg);
+    } else {
+      await fs.writeFile(outputPath, svg, 'utf8');
+    }
+    return {
+      saved: true,
+      path: outputPath,
+      name: path.basename(outputPath)
+    };
+  } catch (error) {
+    return { saved: false, error: String(error?.message || error || 'Unable to export mindmap.') };
+  }
 });
 
 ipcMain.handle('load-mermaid-preview-crash-notice', async () => {
@@ -2661,33 +2687,21 @@ ipcMain.on('set-document-state', (event, payload) => {
 });
 
 ipcMain.on('update-menu-state', (event, payload) => {
-  let menu = Menu.getApplicationMenu();
+  const menu = Menu.getApplicationMenu();
   if (!menu || !payload) return;
   const window = BrowserWindow.fromWebContents(event.sender);
   if (window && typeof payload.mermaidPreviewEnabled === 'boolean') {
     window.__mermaidPreviewEnabled = payload.mermaidPreviewEnabled;
   }
 
-  let shouldRebuildMenu = false;
-  if (Array.isArray(payload.editorFontFamilies)) {
-    const nextFamilies = uniqueSortedFontFamilies(payload.editorFontFamilies);
-    if (JSON.stringify(nextFamilies) !== JSON.stringify(editorFontMenuFamilies)) {
-      editorFontMenuFamilies = nextFamilies;
-      shouldRebuildMenu = true;
-    }
-  }
-  if (typeof payload.editorFontFamily === 'string' && payload.editorFontFamily !== selectedEditorFontFamily) {
-    selectedEditorFontFamily = normalizeFontFamilyName(payload.editorFontFamily);
-    shouldRebuildMenu = true;
-  }
-  if (shouldRebuildMenu) {
-    buildAppMenu();
-    menu = Menu.getApplicationMenu();
-    if (!menu) return;
-  }
-
   const rawItem = menu.getMenuItemById('toggle-raw');
   const formattedItem = menu.getMenuItemById('toggle-formatted');
+  const mindmapItem = menu.getMenuItemById('toggle-mindmap');
+  const mindmapLayoutBalanced = menu.getMenuItemById('mindmap-layout-balanced');
+  const mindmapLayoutRight = menu.getMenuItemById('mindmap-layout-right');
+  const mindmapLayoutLeft = menu.getMenuItemById('mindmap-layout-left');
+  const mindmapLayoutVertical = menu.getMenuItemById('mindmap-layout-vertical');
+  const mindmapLayoutRadial = menu.getMenuItemById('mindmap-layout-radial');
   const themeModeLight = menu.getMenuItemById('theme-mode-light');
   const themeModeDark = menu.getMenuItemById('theme-mode-dark');
   const themeModeAuto = menu.getMenuItemById('theme-mode-auto');
@@ -2724,6 +2738,15 @@ ipcMain.on('update-menu-state', (event, payload) => {
 
   if (rawItem && typeof payload.showRaw === 'boolean') rawItem.checked = payload.showRaw;
   if (formattedItem && typeof payload.showFormatted === 'boolean') formattedItem.checked = payload.showFormatted;
+  if (mindmapItem && typeof payload.showMindmap === 'boolean') mindmapItem.checked = payload.showMindmap;
+  const mindmapLayout = ['right', 'left', 'vertical', 'radial'].includes(payload.mindmapLayout)
+    ? payload.mindmapLayout
+    : 'balanced';
+  if (mindmapLayoutBalanced) mindmapLayoutBalanced.checked = mindmapLayout === 'balanced';
+  if (mindmapLayoutRight) mindmapLayoutRight.checked = mindmapLayout === 'right';
+  if (mindmapLayoutLeft) mindmapLayoutLeft.checked = mindmapLayout === 'left';
+  if (mindmapLayoutVertical) mindmapLayoutVertical.checked = mindmapLayout === 'vertical';
+  if (mindmapLayoutRadial) mindmapLayoutRadial.checked = mindmapLayout === 'radial';
   const darkModeMode = payload.darkModeMode === 'light' || payload.darkModeMode === 'dark' || payload.darkModeMode === 'auto'
     ? payload.darkModeMode
     : payload.darkModeSyncSystem === true
@@ -2908,7 +2931,6 @@ for (const arg of process.argv.slice(1)) {
 app.whenReady().then(() => {
   logDiagnostics('app.whenReady');
   applyDockIcon();
-  configureAboutPanel();
   void (async () => {
     await refreshRecentFilesCache();
     logDiagnostics('app.recent-files.ready', { count: recentFilesCache.length });

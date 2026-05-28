@@ -19,6 +19,10 @@
           <div class="menu-dropdown" data-dropdown="file">
             <button data-action="file-new"><span class="menu-item-main"><img class="menu-item-icon" src="./assets/sf-symbols/new.png" alt="" aria-hidden="true" />New</span><span class="shortcut">⌘N</span></button>
             <button data-action="file-new-window"><span class="menu-item-main"><img class="menu-item-icon" src="./assets/sf-symbols/new.png" alt="" aria-hidden="true" />New Window</span><span class="shortcut">⇧⌘N</span></button>
+            <button data-action="file-new-from-template"><span class="menu-item-main"><img class="menu-item-icon" src="./assets/sf-symbols/new.png" alt="" aria-hidden="true" />New from Template...</span><span class="shortcut">⌥⌘N</span></button>
+            <div class="menu-separator"></div>
+            <button data-action="file-set-default-template">Set Default Template...</button>
+            <button data-action="file-reset-default-template">Reset Default Template</button>
             <div class="menu-separator"></div>
             <button data-action="file-load"><span class="menu-item-main"><img class="menu-item-icon" src="./assets/sf-symbols/open.png" alt="" aria-hidden="true" />Open...</span><span class="shortcut">⌘O</span></button>
             <div class="menu-subheader menu-item-main"><img class="menu-item-icon" src="./assets/sf-symbols/recent.png" alt="" aria-hidden="true" />Open Recent</div>
@@ -27,6 +31,7 @@
             <div class="menu-separator"></div>
             <button data-action="file-save"><span>Save</span><span class="shortcut">⌘S</span></button>
             <button data-action="file-save-as"><span>Export...</span><span class="shortcut">⇧⌘S</span></button>
+            <button data-action="export-mindmap-svg">Export Mindmap...</button>
             <button data-action="open-version-history">Version History...</button>
             <div class="menu-separator"></div>
             <button data-action="app-exit"><span>Exit</span><span class="shortcut">⌘Q</span></button>
@@ -70,6 +75,16 @@
         <div class="menu-group">
           <button class="menu-trigger" data-menu="view">View</button>
           <div class="menu-dropdown" data-dropdown="view">
+            <button data-action="toggle-raw-view" data-toggle="raw">Show Markdown Editor</button>
+            <button data-action="toggle-formatted-view" data-toggle="formatted">Show Preview</button>
+            <button data-action="toggle-mindmap-view" data-toggle="mindmap">Show Mindmap</button>
+            <div class="menu-subheader">MindMap Layout</div>
+            <button data-action="set-mindmap-layout" data-layout="balanced" data-toggle="mindmap-layout-balanced">Balanced</button>
+            <button data-action="set-mindmap-layout" data-layout="right" data-toggle="mindmap-layout-right">Right</button>
+            <button data-action="set-mindmap-layout" data-layout="left" data-toggle="mindmap-layout-left">Left</button>
+            <button data-action="set-mindmap-layout" data-layout="vertical" data-toggle="mindmap-layout-vertical">Vertical</button>
+            <button data-action="set-mindmap-layout" data-layout="radial" data-toggle="mindmap-layout-radial">Radial</button>
+            <div class="menu-separator"></div>
             <div class="menu-subheader">Zoom</div>
             <div class="menu-subheader">Markdown Editor</div>
             <button data-action="zoom-raw-in"><span>Markdown Editor Zoom In</span><span class="shortcut">⌘+</span></button>
@@ -80,9 +95,11 @@
             <button data-action="zoom-formatted-in">Preview Zoom In</button>
             <button data-action="zoom-formatted-out">Preview Zoom Out</button>
             <button data-action="zoom-formatted-reset">Reset Preview Zoom</button>
-            <div class="menu-separator"></div>
-            <button data-action="toggle-raw-view" data-toggle="raw">Show Markdown Editor</button>
-            <button data-action="toggle-formatted-view" data-toggle="formatted">Show Preview</button>
+            <div class="menu-subheader">Mindmap</div>
+            <button data-action="zoom-mindmap-in">Mindmap Zoom In</button>
+            <button data-action="zoom-mindmap-out">Mindmap Zoom Out</button>
+            <button data-action="zoom-mindmap-reset">Reset Mindmap Zoom</button>
+            <button data-action="zoom-mindmap-fit">Fit Mindmap</button>
             <div class="menu-separator"></div>
             <button data-action="toggle-sync-views" data-toggle="sync-views">Syncronise Views</button>
             <button data-action="toggle-word-wrap" data-toggle="word-wrap">Word Wrap</button>
@@ -100,85 +117,15 @@
         <div class="menu-group">
           <button class="menu-trigger" data-menu="tools">Tools</button>
           <div class="menu-dropdown" data-dropdown="tools">
-            <div class="menu-subheader">Document</div>
-            <button data-action="edit-front-matter">Document Metadata...</button>
+            <button data-action="edit-front-matter"><span>Document Metadata...</span><span class="shortcut">⌘M</span></button>
             <button data-action="check-links">Check Links...</button>
             <div class="menu-separator"></div>
-            <div class="menu-submenu">
-              <button type="button" class="menu-submenu-trigger">
-                <span>Themes</span>
-                <span class="shortcut">›</span>
-              </button>
-              <div class="menu-submenu-dropdown">
-                <button data-action="load-theme">Load Theme...</button>
-              </div>
-            </div>
-            <div class="menu-submenu">
-              <button type="button" class="menu-submenu-trigger">
-                <span>Templates</span>
-                <span class="shortcut">›</span>
-              </button>
-              <div class="menu-submenu-dropdown">
-                <button data-action="file-new-from-template">New from Template...</button>
-                <button data-action="file-set-default-template">Set Default Template...</button>
-                <button data-action="file-reset-default-template">Reset Default Template</button>
-              </div>
-            </div>
+            <button data-action="load-theme">Themes</button>
+            <button data-action="file-set-default-template">Templates</button>
             <div class="menu-separator"></div>
-            <div class="menu-submenu">
-              <button type="button" class="menu-submenu-trigger">
-                <span>Export Presets</span>
-                <span class="shortcut">›</span>
-              </button>
-              <div class="menu-submenu-dropdown">
-                <div class="menu-submenu">
-                  <button type="button" class="menu-submenu-trigger">
-                    <span>HTML</span>
-                    <span class="shortcut">›</span>
-                  </button>
-                  <div class="menu-submenu-dropdown">
-                    <button data-action="set-export-html-preset" data-preset="default" data-toggle="export-html-default">Default</button>
-                    <button data-action="set-export-html-preset" data-preset="article" data-toggle="export-html-article">Article</button>
-                    <button data-action="set-export-html-preset" data-preset="compact" data-toggle="export-html-compact">Compact</button>
-                  </div>
-                </div>
-                <div class="menu-submenu">
-                  <button type="button" class="menu-submenu-trigger">
-                    <span>PDF Theme</span>
-                    <span class="shortcut">›</span>
-                  </button>
-                  <div class="menu-submenu-dropdown">
-                    <button data-action="set-export-pdf-preset" data-preset="default" data-toggle="export-pdf-default">Default</button>
-                    <button data-action="set-export-pdf-preset" data-preset="serif" data-toggle="export-pdf-serif">Serif</button>
-                    <button data-action="set-export-pdf-preset" data-preset="dark" data-toggle="export-pdf-dark">Dark</button>
-                  </div>
-                </div>
-                <div class="menu-submenu">
-                  <button type="button" class="menu-submenu-trigger">
-                    <span>DOCX Style</span>
-                    <span class="shortcut">›</span>
-                  </button>
-                  <div class="menu-submenu-dropdown">
-                    <button data-action="set-export-docx-preset" data-preset="default" data-toggle="export-docx-default">Default</button>
-                    <button data-action="set-export-docx-preset" data-preset="classic" data-toggle="export-docx-classic">Classic</button>
-                    <button data-action="set-export-docx-preset" data-preset="report" data-toggle="export-docx-report">Report</button>
-                  </div>
-                </div>
-                <div class="menu-submenu">
-                  <button type="button" class="menu-submenu-trigger">
-                    <span>Pages Preset</span>
-                    <span class="shortcut">›</span>
-                  </button>
-                  <div class="menu-submenu-dropdown">
-                    <button data-action="set-export-pages-preset" data-preset="default" data-toggle="export-pages-default">Default</button>
-                    <button data-action="set-export-pages-preset" data-preset="manuscript" data-toggle="export-pages-manuscript">Manuscript</button>
-                    <button data-action="set-export-pages-preset" data-preset="presentation" data-toggle="export-pages-presentation">Presentation</button>
-                  </div>
-                </div>
-              </div>
-            </div>
+            <button data-action="open-command-palette">Export Presets</button>
             <div class="menu-separator"></div>
-            <button data-action="open-settings">Settings...</button>
+            <button data-action="open-keybindings"><span>Settings...</span><span class="shortcut">⌘,</span></button>
             <button data-action="show-about">About Monospire</button>
           </div>
         </div>
@@ -252,15 +199,20 @@
           <div class="ribbon-theme-control" aria-label="Theme mode">
             <button type="button" data-action="set-dark-mode-mode" data-mode="light" data-theme-mode="light" title="Light theme">Light</button>
             <button type="button" data-action="set-dark-mode-mode" data-mode="dark" data-theme-mode="dark" title="Dark theme">Dark</button>
-            <button type="button" data-action="set-dark-mode-mode" data-mode="auto" data-theme-mode="auto" title="Follow system theme">Auto</button>
+          <button type="button" data-action="set-dark-mode-mode" data-mode="auto" data-theme-mode="auto" title="Follow system theme">Auto</button>
           </div>
+          <button class="ribbon-button ribbon-view-button" data-action="toggle-mindmap-view" data-toggle="mindmap-ribbon" title="Show Mindmap">
+            <i class="ribbon-icon-glyph" aria-hidden="true">MM</i>
+            <span>Mindmap</span>
+          </button>
         </div>
       </section>
 
       <div id="theme-debug" class="theme-debug no-drag">Theme debug: waiting...</div>
 
       <main id="workspace" class="workspace mode-raw">
-        <section id="raw-pane" class="pane pane-raw" data-pane-label="Markdown">
+        <section id="raw-pane" class="pane pane-raw">
+          <div class="pane-header pane-header-markdown">Markdown</div>
           <div id="raw-editor-shell" class="raw-editor-shell">
             <div id="raw-line-number-gutter" class="raw-line-number-gutter" aria-hidden="true">
               <div id="raw-line-number-list" class="raw-line-number-list">1</div>
@@ -269,12 +221,28 @@
           </div>
         </section>
 
-        <section id="formatted-pane" class="pane pane-formatted" data-pane-label="Preview">
+        <section id="formatted-pane" class="pane pane-formatted">
+          <div class="pane-header pane-header-preview">Preview</div>
           <iframe id="formatted-frame" title="Formatted Markdown editor"></iframe>
         </section>
 
+        <section id="mindmap-pane" class="pane pane-mindmap" aria-label="Mindmap view" aria-readonly="true">
+          <div class="mindmap-toolbar no-drag" role="toolbar" aria-label="Mindmap controls">
+            <div class="mindmap-toolbar-title">Mindmap</div>
+            <button type="button" class="mindmap-tool-button" data-action="zoom-mindmap-out" title="Zoom out" aria-label="Zoom out">-</button>
+            <button type="button" class="mindmap-tool-button" data-action="zoom-mindmap-reset" title="Reset zoom" aria-label="Reset zoom">1:1</button>
+            <button type="button" class="mindmap-tool-button" data-action="zoom-mindmap-in" title="Zoom in" aria-label="Zoom in">+</button>
+            <button type="button" class="mindmap-tool-button" data-action="zoom-mindmap-fit" title="Fit to view" aria-label="Fit to view">Fit</button>
+            <button type="button" class="mindmap-tool-button" data-action="export-mindmap-svg" title="Export mindmap" aria-label="Export mindmap">Export</button>
+          </div>
+          <div id="mindmap-diagnostics" class="mindmap-diagnostics" aria-live="polite"></div>
+          <div id="mindmap-viewport" class="mindmap-viewport" tabindex="0" role="tree" aria-label="Readonly Markdown mindmap">
+            <div id="mindmap-canvas" class="mindmap-canvas"></div>
+          </div>
+        </section>
+
         <aside id="toc-pane" class="pane pane-toc no-drag" aria-label="Outline">
-          <div class="toc-header">OUTLINE</div>
+          <div class="toc-header">Outline</div>
           <div id="toc-list" class="toc-list"></div>
         </aside>
       </main>
@@ -345,91 +313,57 @@
         </div>
       </div>
 
-      <div id="settings-modal" class="overlay-panel hidden no-drag" role="dialog" aria-modal="true" aria-label="Settings">
-        <div class="overlay-backdrop" data-action="close-settings"></div>
-        <div class="settings-sheet">
-          <div class="settings-header">Settings</div>
-          <div class="settings-content">
-            <section class="settings-section">
-              <h2>Interface</h2>
-              <label class="settings-row">
-                <span>Ribbon Display</span>
-                <select id="settings-ribbon-mode">
-                  <option value="both">Icons and Text</option>
-                  <option value="icons">Icons only</option>
-                  <option value="text">Text only</option>
-                </select>
-              </label>
-              <label class="settings-row">
-                <span>Theme</span>
-                <select id="settings-theme-mode">
-                  <option value="light">Light</option>
-                  <option value="dark">Dark</option>
-                  <option value="auto">Auto</option>
-                </select>
-              </label>
-              <label class="settings-check-row">
-                <input id="settings-embedded-menu" type="checkbox" />
-                <span>Display menu in app</span>
-              </label>
+      <div id="keybindings-modal" class="overlay-panel hidden no-drag" role="dialog" aria-modal="true" aria-label="Settings">
+        <div class="overlay-backdrop" data-action="close-keybindings"></div>
+        <div class="keybindings-sheet">
+          <div class="keybindings-header">Settings</div>
+          <div class="settings-grid">
+            <section class="settings-card" aria-label="Interface settings">
+              <div class="settings-card-title">Interface</div>
+              <label class="settings-field" for="settings-ribbon-display">Ribbon Display</label>
+              <select id="settings-ribbon-display">
+                <option value="icons">Icons only</option>
+                <option value="text">Text only</option>
+                <option value="both">Icons and Text</option>
+              </select>
+              <label class="settings-field" for="settings-theme-mode">Theme</label>
+              <select id="settings-theme-mode">
+                <option value="light">Light</option>
+                <option value="dark">Dark</option>
+                <option value="auto">Auto</option>
+              </select>
+              <label class="settings-check"><input id="settings-embedded-menu" type="checkbox" /> Display menu in app</label>
             </section>
-
-            <section class="settings-section">
-              <h2>Markdown Editor</h2>
-              <label class="settings-row">
-                <span>Font</span>
-                <select id="settings-editor-font">
-                  <option value="">System Mono</option>
-                </select>
-              </label>
-              <label class="settings-check-row">
-                <input id="settings-word-wrap" type="checkbox" />
-                <span>Word wrap</span>
-              </label>
-              <label class="settings-check-row">
-                <input id="settings-line-numbers" type="checkbox" />
-                <span>Line numbers</span>
-              </label>
+            <section class="settings-card" aria-label="Markdown editor settings">
+              <div class="settings-card-title">Markdown Editor</div>
+              <label class="settings-field" for="settings-editor-font">Font</label>
+              <select id="settings-editor-font">
+                <option value="system-mono">System Mono</option>
+                <option value="system-sans">System Sans</option>
+                <option value="serif">Serif</option>
+              </select>
+              <label class="settings-check"><input id="settings-word-wrap" type="checkbox" /> Word wrap</label>
+              <label class="settings-check"><input id="settings-line-numbers" type="checkbox" /> Line numbers</label>
             </section>
-
-            <section class="settings-section">
-              <h2>Proofing</h2>
-              <label class="settings-check-row">
-                <input id="settings-spellcheck" type="checkbox" />
-                <span>Spell check</span>
-              </label>
-              <label class="settings-row">
-                <span>Dictionary</span>
-                <select id="settings-dictionary-language">
-                  <option value="en-US">English (US)</option>
-                  <option value="en-GB">English (UK)</option>
-                </select>
-              </label>
+            <section class="settings-card" aria-label="Proofing settings">
+              <div class="settings-card-title">Proofing</div>
+              <label class="settings-check"><input id="settings-spellcheck" type="checkbox" /> Spell check</label>
+              <label class="settings-field" for="settings-dictionary">Dictionary</label>
+              <select id="settings-dictionary">
+                <option value="en-US">English (US)</option>
+                <option value="en-GB">English (UK)</option>
+              </select>
             </section>
-
-            <section class="settings-section">
-              <h2>Diagnostics</h2>
-              <label class="settings-check-row">
-                <input id="settings-mermaid-preview" type="checkbox" />
-                <span>Mermaid preview</span>
-              </label>
-              <label class="settings-check-row">
-                <input id="settings-theme-debug" type="checkbox" />
-                <span>Show theme debug</span>
-              </label>
-            </section>
-
-            <section class="settings-section settings-section-wide" id="settings-keyboard-shortcuts">
-              <h2>Keyboard Shortcuts</h2>
-              <div id="keybindings-list" class="keybindings-list"></div>
-              <div class="keybindings-actions">
-                <button data-action="save-keybindings">Save</button>
-                <button data-action="reset-keybindings">Reset Defaults</button>
-              </div>
+            <section class="settings-card" aria-label="Diagnostics settings">
+              <div class="settings-card-title">Diagnostics</div>
+              <label class="settings-check"><input id="settings-mermaid-preview" type="checkbox" /> Mermaid preview</label>
+              <label class="settings-check"><input id="settings-theme-debug" type="checkbox" /> Show theme debug</label>
             </section>
           </div>
-          <div class="settings-actions">
-            <button data-action="close-settings">Close</button>
+          <div class="settings-section-title">Keyboard Shortcuts</div>
+          <div id="keybindings-list" class="keybindings-list"></div>
+          <div class="keybindings-actions">
+            <button data-action="close-keybindings">Close</button>
           </div>
         </div>
       </div>

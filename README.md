@@ -124,6 +124,33 @@ tar -xf monospire-1.2.4-arm64.tar.xz
 
 Installing directly with `apt install monospire` requires a published APT repository. The `.deb` release asset is installable with `apt`, but it does not make Monospire available by package name until an APT repository is added.
 
+## Mindmap View
+
+Monospire includes a readonly Mindmap view for Markdown lists. The Markdown document remains the source of truth; Mindmap view renders headings and nested lists as a diagram with branch colours, task states, optional icons, optional local image thumbnails, zoom/fit controls, source-line selection, diagnostics, and SVG/PDF export.
+
+Example:
+
+```markdown
+# Product Strategy
+
+- Monospire <!-- mindmap: color=blue icon=idea -->
+  - Markdown editor
+    - Raw mode
+    - Preview mode
+  - Mindmap mode <!-- mindmap: color=green shape=pill -->
+    - [x] Readonly v2
+    - [ ] Editable v3 foundation
+  - Launch assets <!-- mindmap: image=assets/monospire-icon-1024.png fill=#eef2ff -->
+```
+
+Supported optional metadata uses Markdown comments immediately after or inside a list item:
+
+```markdown
+- Node label <!-- mindmap: color=purple fill=#f5f3ff icon=star shape=rounded image=assets/example.png -->
+```
+
+Mindmap export is available from the File menu and the Mindmap toolbar.
+
 ## Development
 
 Install dependencies:

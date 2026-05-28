@@ -1,11 +1,12 @@
 {
   "name": "monospire",
   "productName": "Monospire",
-  "version": "1.2.6",
+  "version": "2.0.0",
   "description": "A focused Markdown editor",
   "main": "main.js",
   "scripts": {
     "start": "electron .",
+    "test": "node tests/mindmap-core.test.js",
     "pack:app": "bash ./scripts/package-app.sh",
     "pack:mac": "electron-builder --mac --dir",
     "dist:mac": "electron-builder --mac && npm run brew:cask",
@@ -32,13 +33,14 @@
   "build": {
     "appId": "com.monospire.app",
     "productName": "Monospire",
-    "buildVersion": "1.2.6.0",
+    "buildVersion": "2.0.0.0",
     "asar": false,
     "files": [
       "main.js",
       "preload.js",
       "mermaid-worker.html",
       "mermaid-worker.js",
+      "mindmap-core.js",
       "renderer.js",
       "index.html",
       "styles.css",

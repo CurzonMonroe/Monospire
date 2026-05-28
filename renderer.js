@@ -5,7 +5,14 @@ const path = require('path');
 const fs = require('fs/promises');
 const fsSync = require('fs');
 const os = require('os');
-const { pathToFileURL } = require('url');
+const { pathToFileURL, fileURLToPath } = require('url');
+const {
+  MINDMAP_PALETTE,
+  parseMindmapMarkdown,
+  layoutMindmap,
+  normalizeMindmapLayout,
+  normalizeColour
+} = require('./mindmap-core');
 try {
   require('fs').appendFileSync('/tmp/monospire-renderer.log', `${new Date().toISOString()} renderer module entered pid=${process.pid}\n`, 'utf8');
 } catch {
@@ -33,6 +40,7 @@ let mermaidBackend = '';
 let mermaidRenderVersion = 0;
 const MERMAID_ENABLED = true;
 const MERMAID_RENDER_TIMEOUT_MS = 15000;
+const MARKDOWN_INDENT = '   ';
 
 function diagnosticLog(message, payload = {}) {
   try {
@@ -542,22 +550,13 @@ const rawEditor = document.getElementById('raw-editor');
 const rawEditorShell = document.getElementById('raw-editor-shell');
 const rawLineNumberList = document.getElementById('raw-line-number-list');
 const frame = document.getElementById('formatted-frame');
+const mindmapPane = document.getElementById('mindmap-pane');
+const mindmapViewport = document.getElementById('mindmap-viewport');
+const mindmapCanvas = document.getElementById('mindmap-canvas');
+const mindmapDiagnostics = document.getElementById('mindmap-diagnostics');
 const titlebarText = document.getElementById('titlebar-text');
 const themeDebug = document.getElementById('theme-debug');
 const ribbonThemeModeButtons = [...document.querySelectorAll('[data-theme-mode]')];
-const editorFontMenu = document.getElementById('editor-font-menu');
-const editorFontCurrent = document.getElementById('editor-font-current');
-const settingsModal = document.getElementById('settings-modal');
-const settingsRibbonMode = document.getElementById('settings-ribbon-mode');
-const settingsThemeMode = document.getElementById('settings-theme-mode');
-const settingsEmbeddedMenu = document.getElementById('settings-embedded-menu');
-const settingsEditorFont = document.getElementById('settings-editor-font');
-const settingsWordWrap = document.getElementById('settings-word-wrap');
-const settingsLineNumbers = document.getElementById('settings-line-numbers');
-const settingsSpellcheck = document.getElementById('settings-spellcheck');
-const settingsDictionaryLanguage = document.getElementById('settings-dictionary-language');
-const settingsMermaidPreview = document.getElementById('settings-mermaid-preview');
-const settingsThemeDebug = document.getElementById('settings-theme-debug');
 const recentFilesMenu = document.getElementById('recent-files-menu');
 const tocPane = document.getElementById('toc-pane');
 const tocList = document.getElementById('toc-list');
@@ -576,8 +575,18 @@ const findReplaceStatus = document.getElementById('find-replace-status');
 const linkCheckModal = document.getElementById('link-check-modal');
 const linkCheckSummary = document.getElementById('link-check-summary');
 const linkCheckList = document.getElementById('link-check-list');
+const keybindingsModal = document.getElementById('keybindings-modal');
 const keybindingsList = document.getElementById('keybindings-list');
-const settingsKeyboardShortcuts = document.getElementById('settings-keyboard-shortcuts');
+const settingsRibbonDisplay = document.getElementById('settings-ribbon-display');
+const settingsThemeMode = document.getElementById('settings-theme-mode');
+const settingsEmbeddedMenu = document.getElementById('settings-embedded-menu');
+const settingsEditorFont = document.getElementById('settings-editor-font');
+const settingsWordWrap = document.getElementById('settings-word-wrap');
+const settingsLineNumbers = document.getElementById('settings-line-numbers');
+const settingsSpellcheck = document.getElementById('settings-spellcheck');
+const settingsDictionary = document.getElementById('settings-dictionary');
+const settingsMermaidPreview = document.getElementById('settings-mermaid-preview');
+const settingsThemeDebug = document.getElementById('settings-theme-debug');
 const versionHistoryModal = document.getElementById('version-history-modal');
 const versionHistoryList = document.getElementById('version-history-list');
 const statusLastSaved = document.getElementById('status-last-saved');
@@ -587,7 +596,7 @@ const statusCharCount = document.getElementById('status-char-count');
 const statusImageCount = document.getElementById('status-image-count');
 
 let markdownState = '';
-let lastRenderedHtml = null;
+let lastRenderedHtml = '';
 let userCssPath = null;
 let userCssText = '';
 let themeLightPath = null;
@@ -604,8 +613,11 @@ let lastSavedAt = null;
 
 let showRaw = true;
 let showFormatted = true;
+let showMindmap = false;
 let rawZoom = 1;
 let formattedZoom = 1;
+let mindmapZoom = 1;
+let mindmapLayout = 'balanced';
 let ribbonMode = 'both';
 let splitOrientation = 'horizontal';
 let spellcheckEnabled = true;
@@ -619,8 +631,6 @@ let themeDebugVisible = false;
 let syncViewsEnabled = true;
 let wordWrapEnabled = false;
 let lineNumbersEnabled = false;
-let editorFontFamily = '';
-let editorFontFamilies = [];
 let mermaidPreviewEnabled = false;
 let outlineVisible = true;
 let outlinePosition = 'right';
@@ -636,6 +646,12 @@ let lastLineNumberCount = 0;
 let lastLineNumberSignature = '';
 let lastRawLineMetrics = null;
 let formattedNormalizeTimer = null;
+let mindmapRenderTimer = null;
+let mindmapRenderVersion = 0;
+let lastMindmapSvg = '';
+let lastMindmapLayout = null;
+let focusedMindmapNodeId = '';
+let mindmapPan = { x: 0, y: 0 };
 let lastFindQuery = '';
 let rawFindCursor = 0;
 let previewScrollSyncRaf = null;
@@ -685,59 +701,50 @@ const DEFAULT_KEYBINDINGS = {
   'zoom-raw-in': 'CmdOrCtrl+=',
   'zoom-raw-out': 'CmdOrCtrl+-',
   'zoom-raw-reset': 'CmdOrCtrl+0',
-  'edit-front-matter': 'CmdOrCtrl+M',
-  'open-settings': 'CmdOrCtrl+,',
   'toggle-theme-debug': 'CmdOrCtrl+Shift+D'
 };
 let keybindings = { ...DEFAULT_KEYBINDINGS };
-const IS_MAC = /\bMac|iPhone|iPad|iPod\b/i.test(navigator.platform || '');
+let editorFont = 'system-mono';
+
 const KEYBINDING_GROUPS = [
   {
-    title: 'File',
-    actions: [
-      ['file-new', 'New Document'],
-      ['file-new-window', 'New Window'],
-      ['file-new-from-template', 'New from Template'],
-      ['file-load', 'Open'],
-      ['file-save', 'Save'],
-      ['file-save-as', 'Export'],
-      ['app-exit', 'Exit']
-    ]
+    label: 'File',
+    actions: ['file-new', 'file-new-window', 'file-new-from-template', 'file-load', 'file-save', 'file-save-as', 'app-exit']
   },
   {
-    title: 'Edit',
-    actions: [
-      ['edit-find', 'Find'],
-      ['edit-replace', 'Replace'],
-      ['find-next', 'Find Next'],
-      ['open-command-palette', 'Command Palette']
-    ]
+    label: 'Edit',
+    actions: ['edit-find', 'edit-replace', 'find-next', 'open-command-palette']
   },
   {
-    title: 'Format',
-    actions: [
-      ['format-bold', 'Bold'],
-      ['format-italic', 'Italic'],
-      ['format-inline-code', 'Inline Code']
-    ]
+    label: 'Format',
+    actions: ['format-bold', 'format-italic', 'format-inline-code']
   },
   {
-    title: 'Zoom',
-    actions: [
-      ['zoom-raw-in', 'Editor Zoom In'],
-      ['zoom-raw-out', 'Editor Zoom Out'],
-      ['zoom-raw-reset', 'Reset Editor Zoom']
-    ]
-  },
-  {
-    title: 'Tools',
-    actions: [
-      ['edit-front-matter', 'Document Metadata'],
-      ['open-settings', 'Settings'],
-      ['toggle-theme-debug', 'Theme Debug']
-    ]
+    label: 'View',
+    actions: ['zoom-raw-in', 'zoom-raw-out', 'zoom-raw-reset', 'toggle-theme-debug']
   }
 ];
+
+const KEYBINDING_LABELS = {
+  'file-new': 'New Document',
+  'file-new-window': 'New Window',
+  'file-new-from-template': 'New from Template',
+  'file-load': 'Open',
+  'file-save': 'Save',
+  'file-save-as': 'Export',
+  'app-exit': 'Exit',
+  'edit-find': 'Find',
+  'edit-replace': 'Replace',
+  'find-next': 'Find Next',
+  'open-command-palette': 'Command Palette',
+  'format-bold': 'Bold',
+  'format-italic': 'Italic',
+  'format-inline-code': 'Inline Code',
+  'zoom-raw-in': 'Markdown Zoom In',
+  'zoom-raw-out': 'Markdown Zoom Out',
+  'zoom-raw-reset': 'Reset Markdown Zoom',
+  'toggle-theme-debug': 'Show Theme Debug'
+};
 
 const menuTriggers = [...document.querySelectorAll('.menu-trigger')];
 const menuGroups = [...document.querySelectorAll('.menu-group')];
@@ -768,19 +775,6 @@ function normalizeKeyComboString(input) {
   if (mods.has('Shift')) ordered.push('Shift');
   if (key) ordered.push(key);
   return ordered.join('+');
-}
-
-function formatKeyComboForPlatform(combo) {
-  return String(combo || '')
-    .split('+')
-    .map((part) => {
-      const token = part.trim();
-      if (token === 'CmdOrCtrl') return IS_MAC ? 'Cmd' : 'Ctrl';
-      if (token === 'Alt') return IS_MAC ? 'Option' : 'Alt';
-      return token;
-    })
-    .filter(Boolean)
-    .join('+');
 }
 
 function comboFromKeyboardEvent(event) {
@@ -915,12 +909,10 @@ function measureWrappedRawLineHeights(lines) {
 }
 
 function rawLineMetricSignature() {
-  const style = window.getComputedStyle(rawEditor);
   return [
     wordWrapEnabled ? 'wrap' : 'nowrap',
     rawEditor.clientWidth,
     rawEditor.style.fontSize || '',
-    style.fontFamily || '',
     rawEditor.value
   ].join(':');
 }
@@ -1023,211 +1015,78 @@ async function saveKeybindingsPreference() {
   await window.nativeApi.saveKeybindingsPreference({ keybindings });
 }
 
-function cssFontFamilyValue(family) {
-  const name = String(family || '').trim();
-  if (!name) return '';
-  return `"${name.replace(/\\/g, '\\\\').replace(/"/g, '\\"')}", ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace`;
-}
-
-function cssQuotedFontFamily(family) {
-  return `"${String(family || '').trim().replace(/\\/g, '\\\\').replace(/"/g, '\\"')}"`;
-}
-
-function measureFontSample(context, fontStack) {
-  context.font = `16px ${fontStack}`;
-  return {
-    narrow: context.measureText('iiiiiiiiii').width,
-    wide: context.measureText('WWWWWWWWWW').width,
-    mixed: context.measureText('ilMW01{}[]').width,
-    repeated: context.measureText('mmmmmmmmmm').width
-  };
-}
-
-function isMonospaceMeasurement(metrics) {
-  return Math.abs(metrics.narrow - metrics.wide) < 0.5 && Math.abs(metrics.mixed - metrics.repeated) < 0.5;
-}
-
-function isLikelyMonospaceFont(family) {
-  const name = String(family || '').trim();
-  if (!name) return false;
-  const canvas = isLikelyMonospaceFont.canvas || (isLikelyMonospaceFont.canvas = document.createElement('canvas'));
-  const context = canvas.getContext('2d');
-  if (!context) return false;
-
-  const quoted = cssQuotedFontFamily(name);
-  const serifFallback = measureFontSample(context, `${quoted}, serif`);
-  const sansFallback = measureFontSample(context, `${quoted}, sans-serif`);
-
-  if (!isMonospaceMeasurement(serifFallback) || !isMonospaceMeasurement(sansFallback)) {
-    return false;
-  }
-
-  return (
-    Math.abs(serifFallback.narrow - sansFallback.narrow) < 0.5 &&
-    Math.abs(serifFallback.wide - sansFallback.wide) < 0.5 &&
-    Math.abs(serifFallback.mixed - sansFallback.mixed) < 0.5
-  );
-}
-
-function setEditorFontFamily(family, options = {}) {
-  const persist = options.persist !== false;
-  editorFontFamily = String(family || '').trim();
-  document.documentElement.style.setProperty(
-    '--editor-font-family',
-    editorFontFamily
-      ? cssFontFamilyValue(editorFontFamily)
-      : 'ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace'
-  );
-  if (editorFontCurrent) {
-    editorFontCurrent.textContent = `${editorFontFamily || 'System Mono'} ›`;
-  }
-  if (editorFontMenu) {
-    for (const button of editorFontMenu.querySelectorAll('[data-editor-font-family]')) {
-      button.classList.toggle('checked', button.dataset.editorFontFamily === editorFontFamily);
-    }
-  }
-  if (settingsEditorFont) {
-    settingsEditorFont.value = editorFontFamily;
-  }
-  lastRawLineMetrics = null;
-  updateLineNumbers({ force: true });
-  if (persist) {
-    void window.nativeApi.saveEditorFontPreference({ family: editorFontFamily });
-  }
-  notifyNativeMenuState();
-}
-
-async function populateEditorFontMenu() {
-  if (!editorFontMenu && !settingsEditorFont) return;
-  let families = [];
-  try {
-    const result = await window.nativeApi.listInstalledFontFamilies();
-    families = Array.isArray(result?.families) ? result.families : [];
-  } catch (error) {
-    diagnosticLog('renderer.editor-fonts.list.error', { error: String(error?.message || error) });
-  }
-
-  const monospaceFamilies = families
-    .filter(isLikelyMonospaceFont)
-    .sort((a, b) => a.localeCompare(b, undefined, { sensitivity: 'base' }));
-  editorFontFamilies = monospaceFamilies;
-  const allFamilies = [''].concat(monospaceFamilies);
-  if (editorFontFamily && !allFamilies.includes(editorFontFamily)) {
-    allFamilies.push(editorFontFamily);
-  }
-
-  if (settingsEditorFont) {
-    settingsEditorFont.replaceChildren();
-    for (const family of allFamilies) {
-      const option = document.createElement('option');
-      option.value = family;
-      option.textContent = family || 'System Mono';
-      settingsEditorFont.appendChild(option);
-    }
-    settingsEditorFont.value = editorFontFamily;
-  }
-
-  if (editorFontMenu) {
-    editorFontMenu.replaceChildren();
-    for (const family of allFamilies) {
-      const button = document.createElement('button');
-      button.type = 'button';
-      button.dataset.editorFontFamily = family;
-      button.textContent = family || 'System Mono';
-      button.classList.toggle('checked', family === editorFontFamily);
-      editorFontMenu.appendChild(button);
-    }
-  }
-  notifyNativeMenuState();
-}
-
-async function loadEditorFontPreference() {
-  try {
-    const result = await window.nativeApi.loadEditorFontPreference();
-    return result?.loaded ? String(result.family || '') : '';
-  } catch (error) {
-    diagnosticLog('renderer.editor-font.load.error', { error: String(error?.message || error) });
-    return '';
-  }
-}
-
 function renderKeybindingsEditor() {
   if (!keybindingsList) return;
   keybindingsList.innerHTML = '';
-  const rendered = new Set();
-
   for (const group of KEYBINDING_GROUPS) {
-    const section = document.createElement('section');
-    section.className = 'keybinding-section';
-    const heading = document.createElement('h2');
-    heading.textContent = group.title;
-    section.appendChild(heading);
+    const groupElement = document.createElement('section');
+    groupElement.className = 'keybinding-group';
+    const heading = document.createElement('div');
+    heading.className = 'keybinding-group-title';
+    heading.textContent = group.label;
+    groupElement.appendChild(heading);
 
-    for (const [action, labelText] of group.actions) {
+    for (const action of group.actions) {
       const defaultCombo = DEFAULT_KEYBINDINGS[action];
       if (!defaultCombo) continue;
-      rendered.add(action);
       const row = document.createElement('div');
       row.className = 'keybinding-row';
-
+      const labelWrap = document.createElement('div');
+      labelWrap.className = 'keybinding-label';
       const label = document.createElement('label');
-      label.setAttribute('for', `keybinding-${action}`);
-      const labelMain = document.createElement('span');
-      labelMain.className = 'keybinding-label-main';
-      labelMain.textContent = labelText;
-      const labelDefault = document.createElement('span');
-      labelDefault.className = 'keybinding-label-default';
-      labelDefault.textContent = `Default ${formatKeyComboForPlatform(defaultCombo)}`;
-      label.appendChild(labelMain);
-      label.appendChild(labelDefault);
-
+      label.textContent = keybindingDisplayName(action);
+      const hint = document.createElement('div');
+      hint.className = 'keybinding-default';
+      hint.textContent = `Default ${defaultCombo}`;
       const input = document.createElement('input');
       input.type = 'text';
-      input.id = `keybinding-${action}`;
       input.dataset.action = action;
-      input.value = formatKeyComboForPlatform(keybindings[action] || defaultCombo);
-
-      row.appendChild(label);
+      input.value = keybindings[action] || defaultCombo;
+      labelWrap.appendChild(label);
+      labelWrap.appendChild(hint);
+      row.appendChild(labelWrap);
       row.appendChild(input);
-      section.appendChild(row);
+      groupElement.appendChild(row);
     }
-
-    keybindingsList.appendChild(section);
+    keybindingsList.appendChild(groupElement);
   }
+}
 
-  for (const [action, defaultCombo] of Object.entries(DEFAULT_KEYBINDINGS)) {
-    if (rendered.has(action)) continue;
-    const row = document.createElement('div');
-    row.className = 'keybinding-row';
-    const label = document.createElement('label');
-    label.setAttribute('for', `keybinding-${action}`);
-    const labelMain = document.createElement('span');
-    labelMain.className = 'keybinding-label-main';
-    labelMain.textContent = action;
-    const labelDefault = document.createElement('span');
-    labelDefault.className = 'keybinding-label-default';
-    labelDefault.textContent = `Default ${formatKeyComboForPlatform(defaultCombo)}`;
-    label.appendChild(labelMain);
-    label.appendChild(labelDefault);
-    const input = document.createElement('input');
-    input.type = 'text';
-    input.id = `keybinding-${action}`;
-    input.dataset.action = action;
-    input.value = formatKeyComboForPlatform(keybindings[action] || defaultCombo);
-    row.appendChild(label);
-    row.appendChild(input);
-    keybindingsList.appendChild(row);
+function keybindingDisplayName(action) {
+  if (KEYBINDING_LABELS[action]) return KEYBINDING_LABELS[action];
+  return String(action || '')
+    .replace(/^(file|edit|format|view|tools)-/, '')
+    .split('-')
+    .map((word) => word ? `${word[0].toUpperCase()}${word.slice(1)}` : '')
+    .join(' ');
+}
+
+function renderSettingsControls() {
+  if (settingsRibbonDisplay) settingsRibbonDisplay.value = ribbonMode;
+  if (settingsThemeMode) settingsThemeMode.value = darkModeMode;
+  if (settingsEmbeddedMenu) settingsEmbeddedMenu.checked = embeddedMenu;
+  if (settingsEditorFont) settingsEditorFont.value = editorFont;
+  if (settingsWordWrap) settingsWordWrap.checked = wordWrapEnabled;
+  if (settingsLineNumbers) settingsLineNumbers.checked = lineNumbersEnabled;
+  if (settingsSpellcheck) settingsSpellcheck.checked = spellcheckEnabled;
+  if (settingsDictionary) {
+    settingsDictionary.value = dictionaryLanguage;
+    settingsDictionary.disabled = !spellcheckEnabled;
   }
+  if (settingsMermaidPreview) settingsMermaidPreview.checked = mermaidPreviewEnabled;
+  if (settingsThemeDebug) settingsThemeDebug.checked = themeDebugVisible;
 }
 
 function openKeybindingsModal() {
-  openSettings();
+  if (!keybindingsModal) return;
+  renderSettingsControls();
   renderKeybindingsEditor();
-  settingsKeyboardShortcuts?.scrollIntoView({ block: 'start' });
+  keybindingsModal.classList.remove('hidden');
 }
 
 function closeKeybindingsModal() {
-  closeSettings();
+  if (!keybindingsModal) return;
+  keybindingsModal.classList.add('hidden');
 }
 
 async function saveKeybindingsFromEditor() {
@@ -1242,7 +1101,6 @@ async function saveKeybindingsFromEditor() {
   }
   keybindings = next;
   await saveKeybindingsPreference();
-  renderKeybindingsEditor();
 }
 
 async function resetKeybindingsToDefault() {
@@ -1267,6 +1125,11 @@ function buildSessionStatePayload() {
       previewScrollTop: scrollEl ? scrollEl.scrollTop : 0,
       showRaw,
       showFormatted,
+      showMindmap,
+      mindmapZoom,
+      mindmapLayout,
+      mindmapScrollLeft: mindmapViewport ? mindmapViewport.scrollLeft : 0,
+      mindmapScrollTop: mindmapViewport ? mindmapViewport.scrollTop : 0,
       splitOrientation,
       lastSavedAt,
       docSessionKey
@@ -1290,7 +1153,9 @@ function applySessionState(state) {
   savedBaseline = typeof state.savedBaseline === 'string' ? state.savedBaseline : markdownState;
   lastSavedAt = state.lastSavedAt || null;
   docSessionKey = state.docSessionKey || docSessionKey;
-  setViewVisibility(state.showRaw !== false, state.showFormatted !== false);
+  setViewVisibility(state.showRaw !== false, state.showFormatted !== false, state.showMindmap === true);
+  mindmapZoom = Number.isFinite(state.mindmapZoom) ? Math.max(0.35, Math.min(2.4, state.mindmapZoom)) : 1;
+  mindmapLayout = normalizeMindmapLayout(state.mindmapLayout);
   setSplitOrientation(state.splitOrientation === 'vertical' ? 'vertical' : 'horizontal');
   renderFromMarkdown(markdownState);
   setDirty(Boolean(state.isDirty));
@@ -1306,6 +1171,10 @@ function applySessionState(state) {
     const scrollEl = doc?.scrollingElement || doc?.documentElement || doc?.body;
     if (scrollEl) {
       scrollEl.scrollTop = Number.isFinite(state.previewScrollTop) ? Math.max(0, state.previewScrollTop) : 0;
+    }
+    if (mindmapViewport) {
+      mindmapViewport.scrollLeft = Number.isFinite(state.mindmapScrollLeft) ? Math.max(0, state.mindmapScrollLeft) : 0;
+      mindmapViewport.scrollTop = Number.isFinite(state.mindmapScrollTop) ? Math.max(0, state.mindmapScrollTop) : 0;
     }
   }, 0);
   isRestoringSession = false;
@@ -1505,24 +1374,9 @@ function mergeFrontMatterWithBody(frontMatterBlock, body) {
   return `---\n${normalizedFrontMatter}\n---\n\n${normalizedBody}`;
 }
 
-function normalizeMarkdownBodyForParsing(source) {
-  return String(source || '')
-    .replace(/\r\n?/g, '\n')
-    .split('\n')
-    .map((line) => line.replace(
-      /^([ \t\u00A0\u200B\u200C\u200D\uFEFF]{0,3})(?=#{1,6}(?:\s|$))/,
-      (prefix) => prefix.replace(/\u00A0/g, ' ').replace(/[\u200B\u200C\u200D\uFEFF]/g, '')
-    ))
-    .join('\n');
-}
-
-function renderMarkdownBody(markdownBody, bodyLineOffset = 0) {
-  return md.render(normalizeMarkdownBodyForParsing(markdownBody), { bodyLineOffset: bodyLineOffset || 0 });
-}
-
 function buildOutlineFromMarkdown(source) {
   const split = splitFrontMatter(source);
-  const markdownBody = normalizeMarkdownBodyForParsing(split.body);
+  const markdownBody = split.body;
   const tokens = md.parse(markdownBody, {});
   const slugCounts = {};
   const items = [];
@@ -1611,10 +1465,11 @@ function renderOutlineList() {
   if (!tocList) return;
   tocList.innerHTML = '';
   if (outlineItems.length === 0) {
-    const empty = document.createElement('div');
+    const empty = document.createElement('button');
+    empty.type = 'button';
     empty.className = 'toc-item';
-    empty.classList.add('toc-empty');
-    empty.innerHTML = '<strong>Headings appear here</strong><span>Add # or ## headings to build an outline.</span>';
+    empty.disabled = true;
+    empty.textContent = 'No headings';
     tocList.appendChild(empty);
     return;
   }
@@ -1695,6 +1550,450 @@ function jumpToOutlineItem(item) {
   }
 }
 
+const MINDMAP_SVG_NS = 'http://www.w3.org/2000/svg';
+
+function createSvgElement(tagName, attrs = {}) {
+  const element = document.createElementNS(MINDMAP_SVG_NS, tagName);
+  for (const [key, value] of Object.entries(attrs)) {
+    if (value === null || value === undefined) continue;
+    element.setAttribute(key, String(value));
+  }
+  return element;
+}
+
+function safeSvgId(value) {
+  return String(value || '').replace(/[^a-zA-Z0-9_-]/g, '-');
+}
+
+function escapeSvgText(value) {
+  return String(value || '').replace(/\s+/g, ' ').trim();
+}
+
+function wrapMindmapLabel(value, maxChars = 24, maxLines = 3) {
+  const words = escapeSvgText(value).split(/\s+/).filter(Boolean);
+  if (words.length === 0) return [''];
+  const lines = [];
+  let current = '';
+  for (const word of words) {
+    const candidate = current ? `${current} ${word}` : word;
+    if (candidate.length <= maxChars || current.length === 0) {
+      current = candidate;
+    } else {
+      lines.push(current);
+      current = word;
+    }
+    if (lines.length >= maxLines) break;
+  }
+  if (lines.length < maxLines && current) lines.push(current);
+  if (lines.length === maxLines && words.join(' ').length > lines.join(' ').length) {
+    lines[maxLines - 1] = `${lines[maxLines - 1].replace(/\s+$/, '')}...`;
+  }
+  return lines;
+}
+
+function textColourForFill(fill, fallback) {
+  const colour = normalizeColour(fill);
+  if (!colour) return fallback;
+  const hex = colour.slice(1);
+  const r = parseInt(hex.slice(0, 2), 16);
+  const g = parseInt(hex.slice(2, 4), 16);
+  const b = parseInt(hex.slice(4, 6), 16);
+  const luminance = (0.2126 * r + 0.7152 * g + 0.0722 * b) / 255;
+  return luminance > 0.58 ? '#111827' : '#f8fafc';
+}
+
+function mindmapNodeAccessibleLabel(node) {
+  const task = node.taskState === 'checked'
+    ? 'checked task, '
+    : node.taskState === 'unchecked'
+      ? 'unchecked task, '
+      : '';
+  const childCount = Array.isArray(node.children) ? node.children.length : 0;
+  return `${task}${node.label}${childCount ? `, ${childCount} child nodes` : ''}`;
+}
+
+function resolveMindmapImagePath(imagePath) {
+  const raw = String(imagePath || '').trim();
+  if (!raw) return null;
+  if (/^[a-zA-Z][a-zA-Z0-9+.-]*:/.test(raw)) {
+    if (!raw.startsWith('file:')) return null;
+    return raw;
+  }
+  const baseDir = currentFilePath ? path.dirname(currentFilePath) : process.cwd();
+  return pathToFileURL(path.resolve(baseDir, raw)).href;
+}
+
+function collectMindmapRenderDiagnostics(layout) {
+  const diagnostics = [];
+  for (const item of layout?.nodes || []) {
+    const image = item.node?.metadata?.image;
+    if (!image) continue;
+    const href = resolveMindmapImagePath(image);
+    if (!href) {
+      diagnostics.push({
+        code: 'blocked-image',
+        message: `Ignored unsupported image path "${image}".`,
+        line: item.node.sourceLineStart,
+        severity: 'warning'
+      });
+      continue;
+    }
+    if (href.startsWith('file:')) {
+      try {
+        if (!fsSync.existsSync(fileURLToPath(href))) {
+          diagnostics.push({
+            code: 'missing-image',
+            message: `Image not found: ${image}`,
+            line: item.node.sourceLineStart,
+            severity: 'warning'
+          });
+        }
+      } catch {
+        diagnostics.push({
+          code: 'missing-image',
+          message: `Image could not be loaded: ${image}`,
+          line: item.node.sourceLineStart,
+          severity: 'warning'
+        });
+      }
+    }
+  }
+  return diagnostics;
+}
+
+function appendMindmapIcon(group, iconName, x, y, colour) {
+  const icon = createSvgElement('text', {
+    x,
+    y,
+    'text-anchor': 'middle',
+    'dominant-baseline': 'central',
+    class: 'mindmap-node-text',
+    fill: colour,
+    style: `fill:${colour}`,
+    'aria-hidden': 'true'
+  });
+  const glyphs = {
+    idea: '!',
+    check: 'OK',
+    flag: 'F',
+    star: '*',
+    warning: '!',
+    link: '@',
+    person: 'P',
+    calendar: '#',
+    note: 'N',
+    image: 'IMG'
+  };
+  icon.textContent = glyphs[iconName] || iconName.slice(0, 2).toUpperCase();
+  group.appendChild(icon);
+}
+
+function appendMindmapImage(group, node, x, y) {
+  const imageHref = resolveMindmapImagePath(node.metadata.image);
+  const clipId = `clip-${safeSvgId(node.id)}`;
+  const clip = createSvgElement('clipPath', { id: clipId });
+  clip.appendChild(createSvgElement('rect', { x, y, width: 34, height: 34, rx: 6, ry: 6 }));
+  group.appendChild(clip);
+
+  const placeholder = createSvgElement('rect', {
+    x,
+    y,
+    width: 34,
+    height: 34,
+    rx: 6,
+    ry: 6,
+    fill: darkMode ? '#29313d' : '#eef2f7',
+    stroke: darkMode ? '#465062' : '#cfd6e2'
+  });
+  group.appendChild(placeholder);
+
+  if (!imageHref) {
+    appendMindmapIcon(group, 'image', x + 17, y + 17, darkMode ? '#b7bcc7' : '#666675');
+    return;
+  }
+
+  const image = createSvgElement('image', {
+    x,
+    y,
+    width: 34,
+    height: 34,
+    href: imageHref,
+    preserveAspectRatio: 'xMidYMid slice',
+    'clip-path': `url(#${clipId})`
+  });
+  group.appendChild(image);
+}
+
+function mindmapConnectorPath(from, to) {
+  if (to.side === 'down') {
+    const startX = from.x + from.width / 2;
+    const startY = from.y + from.height;
+    const endX = to.x + to.width / 2;
+    const endY = to.y;
+    const midY = startY + Math.max(34, (endY - startY) / 2);
+    return `M ${startX} ${startY} C ${startX} ${midY}, ${endX} ${midY}, ${endX} ${endY}`;
+  }
+
+  if (to.side === 'left') {
+    const startX = from.x;
+    const startY = from.y + from.height / 2;
+    const endX = to.x + to.width;
+    const endY = to.y + to.height / 2;
+    const mid = Math.max(40, Math.abs(startX - endX) / 2);
+    return `M ${startX} ${startY} C ${startX - mid} ${startY}, ${endX + mid} ${endY}, ${endX} ${endY}`;
+  }
+
+  const startX = from.x + from.width;
+  const startY = from.y + from.height / 2;
+  const endX = to.x;
+  const endY = to.y + to.height / 2;
+  const mid = Math.max(40, Math.abs(endX - startX) / 2);
+  return `M ${startX} ${startY} C ${startX + mid} ${startY}, ${endX - mid} ${endY}, ${endX} ${endY}`;
+}
+
+function renderMindmapDiagnostics(diagnostics) {
+  if (!mindmapDiagnostics) return;
+  const visibleDiagnostics = (diagnostics || []).slice(0, 5);
+  mindmapDiagnostics.innerHTML = '';
+  mindmapDiagnostics.classList.toggle('visible', visibleDiagnostics.length > 0);
+  for (const diagnostic of visibleDiagnostics) {
+    const item = document.createElement('div');
+    item.textContent = diagnostic.line === null || diagnostic.line === undefined
+      ? diagnostic.message
+      : `Line ${diagnostic.line + 1}: ${diagnostic.message}`;
+    mindmapDiagnostics.appendChild(item);
+  }
+}
+
+function renderMindmapEmpty(message, diagnostics = []) {
+  if (!mindmapCanvas) return;
+  mindmapCanvas.innerHTML = '';
+  const empty = document.createElement('div');
+  empty.className = 'mindmap-empty';
+  empty.textContent = message;
+  mindmapCanvas.appendChild(empty);
+  lastMindmapSvg = '';
+  lastMindmapLayout = null;
+  renderMindmapDiagnostics(diagnostics);
+}
+
+function renderMindmapSvg(layout, diagnostics = []) {
+  if (!mindmapCanvas || !mindmapViewport) return;
+  mindmapCanvas.innerHTML = '';
+  const textColour = '#161617';
+  const mutedColour = '#666675';
+  const defaultNodeFill = '#ffffff';
+  const rootFill = '#d8e9ff';
+  const placeholderFill = darkMode ? '#29313d' : '#eef2f7';
+  const nodeBorder = darkMode ? '#465062' : '#cfd6e2';
+  const focusRing = darkMode ? '#76b7ff' : '#0a84ff';
+  const svg = createSvgElement('svg', {
+    class: 'mindmap-svg',
+    width: layout.width,
+    height: layout.height,
+    viewBox: `0 0 ${layout.width} ${layout.height}`,
+    role: 'presentation',
+    'aria-hidden': 'false'
+  });
+
+  const style = createSvgElement('style');
+  style.textContent = `
+    .mindmap-node-text{fill:${textColour};font:600 12px -apple-system,BlinkMacSystemFont,"Helvetica Neue",sans-serif}
+    .mindmap-node-subtext{fill:${mutedColour};font:10px -apple-system,BlinkMacSystemFont,"Helvetica Neue",sans-serif}
+    .mindmap-link{fill:none;stroke-linecap:round;stroke-width:3;opacity:.78}
+    .mindmap-node:focus .mindmap-node-outline,.mindmap-node.focused .mindmap-node-outline{stroke:${focusRing};stroke-width:3}
+  `;
+  svg.appendChild(style);
+
+  const defs = createSvgElement('defs');
+  svg.appendChild(defs);
+  const nodeById = new Map(layout.nodes.map((item) => [item.id, item]));
+
+  const linkLayer = createSvgElement('g', { class: 'mindmap-links', 'aria-hidden': 'true' });
+  for (const link of layout.links) {
+    const from = nodeById.get(link.from);
+    const to = nodeById.get(link.to);
+    if (!from || !to) continue;
+    const colour = to.colour || MINDMAP_PALETTE[link.branchIndex % MINDMAP_PALETTE.length];
+    linkLayer.appendChild(createSvgElement('path', {
+      class: 'mindmap-link',
+      d: mindmapConnectorPath(from, to),
+      stroke: colour
+    }));
+  }
+  svg.appendChild(linkLayer);
+
+  const nodeLayer = createSvgElement('g', { class: 'mindmap-nodes' });
+  for (const item of layout.nodes) {
+    const { node } = item;
+    const group = createSvgElement('g', {
+      class: `mindmap-node${focusedMindmapNodeId === node.id ? ' focused' : ''}`,
+      tabindex: '0',
+      role: 'treeitem',
+      'aria-label': mindmapNodeAccessibleLabel(node),
+      'data-node-id': node.id,
+      'data-line': node.sourceLineStart
+    });
+
+    const fill = item.fill || (node.depth === 0 ? rootFill : defaultNodeFill);
+    const stroke = item.colour || nodeBorder;
+    const nodeTextColour = textColourForFill(item.fill, textColour);
+    const nodeMutedColour = textColourForFill(item.fill, mutedColour);
+    const outlineAttrs = {
+      class: 'mindmap-node-outline',
+      fill,
+      stroke,
+      'stroke-width': node.depth === 0 ? 2.4 : 1.6
+    };
+    if (item.shape === 'circle') {
+      group.appendChild(createSvgElement('circle', {
+        ...outlineAttrs,
+        cx: item.x + item.width / 2,
+        cy: item.y + item.height / 2,
+        r: Math.min(item.width, item.height) / 2
+      }));
+    } else {
+      const radius = item.shape === 'rectangle' ? 5 : item.shape === 'pill' ? item.height / 2 : 12;
+      group.appendChild(createSvgElement('rect', {
+        ...outlineAttrs,
+        x: item.x,
+        y: item.y,
+        width: item.width,
+        height: item.height,
+        rx: radius,
+        ry: radius
+      }));
+    }
+
+    let textX = item.x + 16;
+    if (node.metadata.image) {
+      appendMindmapImage(group, node, item.x + 12, item.y + 10);
+      textX += 42;
+    } else if (node.metadata.icon || node.taskState) {
+      appendMindmapIcon(group, node.metadata.icon || (node.taskState === 'checked' ? 'check' : 'note'), item.x + 24, item.y + item.height / 2, item.colour);
+      textX += 24;
+    }
+
+    const lines = wrapMindmapLabel(node.label, node.depth === 0 ? 22 : 24, node.metadata.image ? 2 : 3);
+    const startY = item.y + (item.height / 2) - ((lines.length - 1) * 8);
+    for (let i = 0; i < lines.length; i += 1) {
+      const text = createSvgElement('text', {
+        x: textX,
+        y: startY + i * 16,
+        class: 'mindmap-node-text',
+        'dominant-baseline': 'central',
+        style: `fill:${nodeTextColour}`
+      });
+      text.textContent = lines[i];
+      group.appendChild(text);
+    }
+    if (node.taskState) {
+      const sub = createSvgElement('text', {
+        x: item.x + item.width - 14,
+        y: item.y + item.height - 12,
+        class: 'mindmap-node-subtext',
+        'text-anchor': 'end',
+        style: `fill:${nodeMutedColour}`
+      });
+      sub.textContent = node.taskState === 'checked' ? 'done' : 'open';
+      group.appendChild(sub);
+    }
+    nodeLayer.appendChild(group);
+  }
+  svg.appendChild(nodeLayer);
+  mindmapCanvas.appendChild(svg);
+  mindmapCanvas.style.width = `${layout.width}px`;
+  mindmapCanvas.style.height = `${layout.height}px`;
+  applyMindmapZoom();
+  lastMindmapSvg = new XMLSerializer().serializeToString(svg);
+  lastMindmapLayout = layout;
+  renderMindmapDiagnostics(diagnostics);
+}
+
+function renderMindmapNow(version) {
+  if (version !== mindmapRenderVersion || !showMindmap) return;
+  const parsed = parseMindmapMarkdown(markdownState, { fileName: currentFileName });
+  if (!parsed.ok || !parsed.root) {
+    renderMindmapEmpty('Add a Markdown list to see it as a mindmap.', parsed.diagnostics);
+    return;
+  }
+  const flatCount = parsed.root ? layoutMindmap(parsed.root, { layout: mindmapLayout }).nodes.length : 0;
+  const diagnostics = [...parsed.diagnostics];
+  if (flatCount > 250) {
+    diagnostics.push({
+      code: 'large-mindmap',
+      message: 'Large mindmap rendered with simplified styling.',
+      line: null,
+      severity: 'info'
+    });
+  }
+  const layout = layoutMindmap(parsed.root, { layout: mindmapLayout });
+  renderMindmapSvg(layout, [...diagnostics, ...collectMindmapRenderDiagnostics(layout)]);
+}
+
+function renderMindmapImmediately() {
+  if (!showMindmap) return;
+  mindmapRenderVersion += 1;
+  const version = mindmapRenderVersion;
+  if (mindmapRenderTimer) {
+    clearTimeout(mindmapRenderTimer);
+    mindmapRenderTimer = null;
+  }
+  renderMindmapNow(version);
+}
+
+function scheduleMindmapRender() {
+  if (!showMindmap) return;
+  mindmapRenderVersion += 1;
+  const version = mindmapRenderVersion;
+  if (mindmapRenderTimer) clearTimeout(mindmapRenderTimer);
+  mindmapRenderTimer = setTimeout(() => renderMindmapNow(version), 140);
+}
+
+function applyMindmapZoom() {
+  if (!mindmapCanvas) return;
+  mindmapCanvas.style.transform = `scale(${mindmapZoom})`;
+  if (lastMindmapLayout) {
+    mindmapCanvas.style.width = `${lastMindmapLayout.width * mindmapZoom}px`;
+    mindmapCanvas.style.height = `${lastMindmapLayout.height * mindmapZoom}px`;
+  }
+}
+
+function fitMindmapToView() {
+  if (!mindmapViewport || !lastMindmapLayout) return;
+  const widthRatio = (mindmapViewport.clientWidth - 36) / Math.max(1, lastMindmapLayout.width);
+  const heightRatio = (mindmapViewport.clientHeight - 36) / Math.max(1, lastMindmapLayout.height);
+  mindmapZoom = Math.max(0.35, Math.min(1.6, Math.min(widthRatio, heightRatio)));
+  applyMindmapZoom();
+}
+
+async function exportMindmapSvg() {
+  if (!lastMindmapSvg) {
+    scheduleMindmapRender();
+    window.alert('Mindmap export is not ready yet.');
+    return false;
+  }
+  const baseName = currentFileName ? basename(currentFileName).replace(/\.[^.]+$/, '') : 'Untitled';
+  const result = await window.nativeApi.exportMindmapSvg({
+    path: currentFilePath,
+    suggestedName: `${baseName}-mindmap`,
+    svg: lastMindmapSvg
+  });
+  if (!result?.saved && result?.error) {
+    window.alert(`Mindmap export failed: ${result.error}`);
+    return false;
+  }
+  return Boolean(result?.saved);
+}
+
+function focusMindmapNode(nodeId) {
+  focusedMindmapNodeId = nodeId || '';
+  if (!mindmapCanvas) return;
+  for (const node of mindmapCanvas.querySelectorAll('.mindmap-node')) {
+    node.classList.toggle('focused', node.getAttribute('data-node-id') === focusedMindmapNodeId);
+  }
+}
+
 function commandPaletteCommands() {
   return [
     { label: 'File: New', action: 'file-new' },
@@ -1704,18 +2003,26 @@ function commandPaletteCommands() {
     { label: 'Edit: Find...', action: 'edit-find' },
     { label: 'Edit: Replace...', action: 'edit-replace' },
     { label: 'Tools: Check Links...', action: 'check-links' },
+    { label: 'Tools: Keyboard Shortcuts...', action: 'open-keybindings' },
     { label: 'File: Version History...', action: 'open-version-history' },
     { label: 'View: Show Markdown Editor', action: 'toggle-raw-view', payload: { enabled: true } },
     { label: 'View: Show Preview', action: 'toggle-formatted-view', payload: { enabled: true } },
+    { label: 'View: Toggle Mindmap', action: 'toggle-mindmap-view' },
+    { label: 'View: Show Mindmap', action: 'toggle-mindmap-view', payload: { enabled: true } },
+    { label: 'Mindmap Layout: Balanced', action: 'set-mindmap-layout', payload: { layout: 'balanced' } },
+    { label: 'Mindmap Layout: Right', action: 'set-mindmap-layout', payload: { layout: 'right' } },
+    { label: 'Mindmap Layout: Left', action: 'set-mindmap-layout', payload: { layout: 'left' } },
+    { label: 'Mindmap Layout: Vertical', action: 'set-mindmap-layout', payload: { layout: 'vertical' } },
+    { label: 'Mindmap Layout: Radial', action: 'set-mindmap-layout', payload: { layout: 'radial' } },
+    { label: 'Mindmap: Export...', action: 'export-mindmap-svg' },
     { label: 'View: Toggle Outline', action: 'toggle-outline-view' },
     { label: 'View: Outline Left', action: 'outline-left' },
     { label: 'View: Outline Right', action: 'outline-right' },
     { label: 'View: Syncronise Views', action: 'toggle-sync-views' },
     { label: 'View: Toggle Word Wrap', action: 'toggle-word-wrap' },
     { label: 'View: Toggle Line Numbers', action: 'toggle-line-numbers' },
-    { label: 'Tools: Document Metadata', action: 'edit-front-matter' },
+    { label: 'Tools: Edit Front Matter', action: 'edit-front-matter' },
     { label: 'Tools: Load Theme', action: 'load-theme' },
-    { label: 'Tools: Settings', action: 'open-settings' },
     { label: 'Tools: Theme Light', action: 'set-dark-mode-mode', payload: { mode: 'light' } },
     { label: 'Tools: Theme Dark', action: 'set-dark-mode-mode', payload: { mode: 'dark' } },
     { label: 'Tools: Theme Auto', action: 'set-dark-mode-mode', payload: { mode: 'auto' } }
@@ -1821,6 +2128,13 @@ function saveFrontMatterFromEditor() {
 function updateMenuChecks() {
   const rawToggle = document.querySelector('[data-toggle="raw"]');
   const formattedToggle = document.querySelector('[data-toggle="formatted"]');
+  const mindmapToggle = document.querySelector('[data-toggle="mindmap"]');
+  const mindmapRibbonToggle = document.querySelector('[data-toggle="mindmap-ribbon"]');
+  const mindmapLayoutBalancedToggle = document.querySelector('[data-toggle="mindmap-layout-balanced"]');
+  const mindmapLayoutRightToggle = document.querySelector('[data-toggle="mindmap-layout-right"]');
+  const mindmapLayoutLeftToggle = document.querySelector('[data-toggle="mindmap-layout-left"]');
+  const mindmapLayoutVerticalToggle = document.querySelector('[data-toggle="mindmap-layout-vertical"]');
+  const mindmapLayoutRadialToggle = document.querySelector('[data-toggle="mindmap-layout-radial"]');
   const embeddedMenuToggle = document.querySelector('[data-toggle="embedded-menu"]');
   const themeDebugToggle = document.querySelector('[data-toggle="theme-debug"]');
   const horizontalViewToggle = document.querySelector('[data-toggle="horizontal-view"]');
@@ -1853,6 +2167,13 @@ function updateMenuChecks() {
 
   if (rawToggle) rawToggle.classList.toggle('checked', showRaw);
   if (formattedToggle) formattedToggle.classList.toggle('checked', showFormatted);
+  if (mindmapToggle) mindmapToggle.classList.toggle('checked', showMindmap);
+  if (mindmapRibbonToggle) mindmapRibbonToggle.classList.toggle('checked', showMindmap);
+  if (mindmapLayoutBalancedToggle) mindmapLayoutBalancedToggle.classList.toggle('checked', mindmapLayout === 'balanced');
+  if (mindmapLayoutRightToggle) mindmapLayoutRightToggle.classList.toggle('checked', mindmapLayout === 'right');
+  if (mindmapLayoutLeftToggle) mindmapLayoutLeftToggle.classList.toggle('checked', mindmapLayout === 'left');
+  if (mindmapLayoutVerticalToggle) mindmapLayoutVerticalToggle.classList.toggle('checked', mindmapLayout === 'vertical');
+  if (mindmapLayoutRadialToggle) mindmapLayoutRadialToggle.classList.toggle('checked', mindmapLayout === 'radial');
   if (embeddedMenuToggle) embeddedMenuToggle.classList.toggle('checked', embeddedMenu);
   if (themeDebugToggle) themeDebugToggle.classList.toggle('checked', themeDebugVisible);
   if (horizontalViewToggle) horizontalViewToggle.classList.toggle('checked', splitOrientation === 'horizontal');
@@ -1889,33 +2210,6 @@ function updateMenuChecks() {
   if (exportPagesPresentation) exportPagesPresentation.classList.toggle('checked', exportPagesPreset === 'presentation');
   if (dictionaryUsToggle) dictionaryUsToggle.disabled = !spellcheckEnabled;
   if (dictionaryGbToggle) dictionaryGbToggle.disabled = !spellcheckEnabled;
-  syncSettingsControls();
-}
-
-function syncSettingsControls() {
-  if (settingsRibbonMode) settingsRibbonMode.value = ribbonMode;
-  if (settingsThemeMode) settingsThemeMode.value = darkModeMode;
-  if (settingsEmbeddedMenu) settingsEmbeddedMenu.checked = embeddedMenu;
-  if (settingsEditorFont) settingsEditorFont.value = editorFontFamily;
-  if (settingsWordWrap) settingsWordWrap.checked = wordWrapEnabled;
-  if (settingsLineNumbers) settingsLineNumbers.checked = lineNumbersEnabled;
-  if (settingsSpellcheck) settingsSpellcheck.checked = spellcheckEnabled;
-  if (settingsDictionaryLanguage) {
-    settingsDictionaryLanguage.value = dictionaryLanguage;
-    settingsDictionaryLanguage.disabled = !spellcheckEnabled;
-  }
-  if (settingsMermaidPreview) settingsMermaidPreview.checked = mermaidPreviewEnabled;
-  if (settingsThemeDebug) settingsThemeDebug.checked = themeDebugVisible;
-}
-
-function openSettings() {
-  syncSettingsControls();
-  renderKeybindingsEditor();
-  if (settingsModal) settingsModal.classList.remove('hidden');
-}
-
-function closeSettings() {
-  if (settingsModal) settingsModal.classList.add('hidden');
 }
 
 function notifyNativeMenuState() {
@@ -1928,6 +2222,8 @@ function notifyNativeMenuState() {
   window.nativeApi.updateMenuState({
     showRaw,
     showFormatted,
+    showMindmap,
+    mindmapLayout,
     darkMode,
     darkModeMode,
     darkModeSyncSystem,
@@ -1947,9 +2243,7 @@ function notifyNativeMenuState() {
     exportPdfPreset,
     exportDocxPreset,
     exportPagesPreset,
-    activeThemeFileName,
-    editorFontFamily,
-    editorFontFamilies
+    activeThemeFileName
   });
 }
 
@@ -1973,14 +2267,34 @@ function setListContinuationMode(nextMode) {
 }
 
 function setModeFromVisibility() {
-  workspace.classList.remove('mode-raw', 'mode-formatted', 'mode-split');
+  workspace.classList.remove(
+    'mode-raw',
+    'mode-formatted',
+    'mode-mindmap',
+    'mode-split',
+    'mode-raw-formatted',
+    'mode-raw-mindmap',
+    'mode-formatted-mindmap',
+    'mode-all'
+  );
 
-  if (showRaw && showFormatted) {
-    workspace.classList.add('mode-split');
+  const visibleCount = [showRaw, showFormatted, showMindmap].filter(Boolean).length;
+  workspace.style.setProperty('--visible-pane-count', String(Math.max(1, visibleCount)));
+
+  if (showRaw && showFormatted && showMindmap) {
+    workspace.classList.add('mode-all');
+  } else if (showRaw && showFormatted) {
+    workspace.classList.add('mode-raw-formatted', 'mode-split');
+  } else if (showRaw && showMindmap) {
+    workspace.classList.add('mode-raw-mindmap');
+  } else if (showFormatted && showMindmap) {
+    workspace.classList.add('mode-formatted-mindmap');
   } else if (showRaw) {
     workspace.classList.add('mode-raw');
-  } else {
+  } else if (showFormatted) {
     workspace.classList.add('mode-formatted');
+  } else {
+    workspace.classList.add('mode-mindmap');
   }
 
   applySplitOrientation();
@@ -1988,15 +2302,17 @@ function setModeFromVisibility() {
   notifyNativeMenuState();
 }
 
-function setViewVisibility(nextRaw, nextFormatted) {
-  if (!nextRaw && !nextFormatted) {
+function setViewVisibility(nextRaw, nextFormatted, nextMindmap = showMindmap) {
+  if (!nextRaw && !nextFormatted && !nextMindmap) {
     return;
   }
 
   showRaw = nextRaw;
   showFormatted = nextFormatted;
+  showMindmap = nextMindmap;
   setModeFromVisibility();
   invalidatePreviewAnchorCache();
+  scheduleMindmapRender();
   publishSessionState();
 }
 
@@ -2053,6 +2369,29 @@ function redoRaw() {
 function applyRawZoom() {
   rawEditor.style.fontSize = `${14 * rawZoom}px`;
   updateLineNumbers({ force: true });
+}
+
+function applyEditorFont() {
+  const fontStacks = {
+    'system-mono': "ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, 'Liberation Mono', monospace",
+    'system-sans': "-apple-system, BlinkMacSystemFont, 'SF Pro Text', 'Helvetica Neue', sans-serif",
+    serif: "Georgia, 'Times New Roman', serif"
+  };
+  rawEditor.style.fontFamily = fontStacks[editorFont] || fontStacks['system-mono'];
+  if (rawLineNumberList) {
+    rawLineNumberList.style.fontFamily = fontStacks['system-mono'];
+  }
+  updateLineNumbers({ force: true });
+}
+
+function setEditorFont(nextFont) {
+  if (nextFont !== 'system-sans' && nextFont !== 'serif') {
+    editorFont = 'system-mono';
+  } else {
+    editorFont = nextFont;
+  }
+  applyEditorFont();
+  renderSettingsControls();
 }
 
 function applyFormattedZoom() {
@@ -2131,6 +2470,7 @@ function setDarkMode(enabled, options = {}) {
     lastRenderedHtml = '';
     renderFromMarkdown(markdownState);
   }
+  scheduleMindmapRender();
   void applyThemeVariantForMode();
   if (persist) {
     void window.nativeApi.saveDarkModePreference({ enabled: darkMode });
@@ -2224,6 +2564,15 @@ async function loadMermaidPreviewPreference() {
   return result.enabled === true;
 }
 
+async function loadMindmapPreference() {
+  const result = await window.nativeApi.loadMindmapPreference();
+  if (!result?.loaded) return { enabled: false, layout: 'balanced' };
+  return {
+    enabled: result.enabled === true,
+    layout: normalizeMindmapLayout(result.layout)
+  };
+}
+
 async function loadOutlinePreference() {
   const result = await window.nativeApi.loadOutlinePreference();
   if (!result?.loaded) return { visible: true, position: 'right' };
@@ -2298,6 +2647,34 @@ async function loadLineNumbersPreference() {
   return result.enabled === true;
 }
 
+function setMindmapVisible(enabled, options = {}) {
+  const persist = options.persist !== false;
+  setViewVisibility(showRaw, showFormatted, enabled === true);
+  if (persist) {
+    void window.nativeApi.saveMindmapPreference({
+      enabled: showMindmap,
+      layout: mindmapLayout
+    });
+  }
+  updateMenuChecks();
+  notifyNativeMenuState();
+}
+
+function setMindmapLayout(layout, options = {}) {
+  const persist = options.persist !== false;
+  mindmapLayout = normalizeMindmapLayout(layout);
+  renderMindmapImmediately();
+  updateMenuChecks();
+  notifyNativeMenuState();
+  publishSessionState();
+  if (persist) {
+    void window.nativeApi.saveMindmapPreference({
+      enabled: showMindmap,
+      layout: mindmapLayout
+    });
+  }
+}
+
 function setMermaidPreviewEnabled(enabled, options = {}) {
   const persist = options.persist !== false;
   mermaidPreviewEnabled = enabled === true;
@@ -2349,37 +2726,29 @@ function ensurePreviewChromeCss(doc) {
   previewChromeCss.textContent = `
     body {
       box-sizing: border-box !important;
-      padding: 12px 28px 32px 28px !important;
-    }
-    body > :first-child {
-      margin-top: 0 !important;
+      padding: 28px 28px 32px 28px !important;
     }
     .preview-empty-state {
-      min-height: calc(100vh - 48px);
+      min-height: calc(100vh - 60px);
       display: grid;
       place-items: center;
-      color: #8b92a1;
-      font-family: -apple-system, BlinkMacSystemFont, 'SF Pro Text', 'Helvetica Neue', sans-serif;
       text-align: center;
-    }
-    .preview-empty-state > div {
-      max-width: 320px;
-      display: grid;
-      gap: 6px;
+      color: #7a8497;
+      font-family: -apple-system, BlinkMacSystemFont, 'SF Pro Text', 'Helvetica Neue', sans-serif;
+      font-size: 13px;
+      line-height: 1.5;
     }
     .preview-empty-state strong {
-      color: #666675;
+      display: block;
+      margin-bottom: 6px;
+      color: #575d6b;
       font-size: 13px;
     }
-    .preview-empty-state span {
-      font-size: 12px;
-      line-height: 1.45;
-    }
     body.theme-dark .preview-empty-state {
-      color: #858ea0;
+      color: #aeb6c7;
     }
     body.theme-dark .preview-empty-state strong {
-      color: #c3cad9;
+      color: #d3d7e0;
     }
   `;
 }
@@ -2479,10 +2848,29 @@ function ensureFrameDocument() {
     <style id="preview-chrome-css">
       body {
         box-sizing: border-box !important;
-        padding: 12px 28px 32px 28px !important;
+        padding: 28px 28px 32px 28px !important;
       }
-      body > :first-child {
-        margin-top: 0 !important;
+      .preview-empty-state {
+        min-height: calc(100vh - 60px);
+        display: grid;
+        place-items: center;
+        text-align: center;
+        color: #7a8497;
+        font-family: -apple-system, BlinkMacSystemFont, 'SF Pro Text', 'Helvetica Neue', sans-serif;
+        font-size: 13px;
+        line-height: 1.5;
+      }
+      .preview-empty-state strong {
+        display: block;
+        margin-bottom: 6px;
+        color: #575d6b;
+        font-size: 13px;
+      }
+      body.theme-dark .preview-empty-state {
+        color: #aeb6c7;
+      }
+      body.theme-dark .preview-empty-state strong {
+        color: #d3d7e0;
       }
     </style>
   </head>
@@ -2731,7 +3119,7 @@ async function applyThemeVariantForMode() {
   setActiveThemeFromMode();
   await updateFrameCss();
   const split = splitFrontMatter(markdownState);
-  patchFrameHtml(renderMarkdownBody(split.body, split.bodyLineOffset));
+  patchFrameHtml(md.render(split.body, { bodyLineOffset: split.bodyLineOffset || 0 }));
   scheduleFrameMermaidRender();
   applyFrameTheme();
   applyFormattedZoom();
@@ -2743,14 +3131,13 @@ function patchFrameHtml(html) {
   const doc = frame.contentDocument;
   if (!doc) return;
 
-  const nextHtml = String(html || '').trim().length > 0
-    ? html
-    : '<div class="preview-empty-state" contenteditable="false"><div><strong>Preview appears here</strong><span>Start writing Markdown in the editor to see it rendered.</span></div></div>';
   const bodyElement = doc.body;
   const tempBody = doc.createElement('body');
   tempBody.setAttribute('contenteditable', 'true');
   tempBody.className = doc.body.className;
-  tempBody.innerHTML = nextHtml;
+  tempBody.innerHTML = String(html || '').trim()
+    ? html
+    : '<div class="preview-empty-state" contenteditable="false"><div><strong>Preview appears here</strong><span>Start writing Markdown in the editor to see it rendered.</span></div></div>';
 
   morphdom(bodyElement, tempBody, {
     childrenOnly: true,
@@ -2876,7 +3263,7 @@ async function renderMarkdownForExport(markdown) {
   let html = '';
   renderingForExport = true;
   try {
-    html = renderMarkdownBody(split.body, split.bodyLineOffset);
+    html = md.render(split.body, { bodyLineOffset: split.bodyLineOffset || 0 });
   } finally {
     renderingForExport = false;
   }
@@ -2896,7 +3283,7 @@ function scheduleFormattedNormalization() {
     const doc = frame.contentDocument;
     if (!doc) return;
     const split = splitFrontMatter(markdownState);
-    patchFrameHtml(renderMarkdownBody(split.body, split.bodyLineOffset));
+    patchFrameHtml(md.render(split.body, { bodyLineOffset: split.bodyLineOffset || 0 }));
     scheduleFrameMermaidRender();
     applyFrameTheme();
     applyFormattedZoom();
@@ -2906,7 +3293,7 @@ function scheduleFormattedNormalization() {
 function renderFromMarkdown(source) {
   markdownState = source;
   const split = splitFrontMatter(markdownState);
-  const html = renderMarkdownBody(split.body, split.bodyLineOffset);
+  const html = md.render(split.body, { bodyLineOffset: split.bodyLineOffset || 0 });
 
   if (html !== lastRenderedHtml) {
     if (!suppressRawHandler && document.activeElement !== rawEditor) {
@@ -2927,6 +3314,7 @@ function renderFromMarkdown(source) {
   }
 
   updateOutline();
+  scheduleMindmapRender();
   updateStatusBar();
 }
 
@@ -3211,7 +3599,7 @@ function applyHeadingShortcutInFormatted(event) {
   const range = selection.getRangeAt(0);
   const anchorNode = range.startContainer;
   const element = anchorNode.nodeType === Node.ELEMENT_NODE ? anchorNode : anchorNode.parentElement;
-  const block = element?.closest?.('p,div,h1,h2,h3,h4,h5,h6');
+  const block = element?.closest?.('p,div');
   if (!block) return false;
 
   const prefixRange = doc.createRange();
@@ -3287,22 +3675,46 @@ function prefixSelectedLines(prefixFn) {
 function adjustCurrentLineIndent(increase) {
   replaceSelectionInRaw(({ text, start, end }) => {
     const lineStart = text.lastIndexOf('\n', Math.max(0, start - 1)) + 1;
-    const lineEndIndex = text.indexOf('\n', end);
+    const selectionEndsAtLineStart = end > start && text[end - 1] === '\n';
+    const effectiveEnd = selectionEndsAtLineStart ? end - 1 : end;
+    const lineEndIndex = text.indexOf('\n', effectiveEnd);
     const lineEnd = lineEndIndex === -1 ? text.length : lineEndIndex;
-    const line = text.slice(lineStart, lineEnd);
+    const block = text.slice(lineStart, lineEnd);
+    let changed = false;
+    let firstDelta = 0;
+    let totalDelta = 0;
+    const updatedBlock = block
+      .split('\n')
+      .map((line, index) => {
+        let updatedLine = line;
+        if (increase) {
+          updatedLine = `${MARKDOWN_INDENT}${line}`;
+        } else if (line.startsWith('\t')) {
+          updatedLine = line.slice(1);
+        } else if (line.startsWith(MARKDOWN_INDENT)) {
+          updatedLine = line.slice(MARKDOWN_INDENT.length);
+        } else if (line.startsWith('  ')) {
+          updatedLine = line.slice(2);
+        } else if (line.startsWith(' ')) {
+          updatedLine = line.slice(1);
+        }
+        const delta = updatedLine.length - line.length;
+        if (delta !== 0) {
+          changed = true;
+          if (index === 0) firstDelta = delta;
+          totalDelta += delta;
+        }
+        return updatedLine;
+      })
+      .join('\n');
 
-    const updatedLine = increase
-      ? `\t${line}`
-      : (line.startsWith('\t') ? line.slice(1) : line);
+    if (!changed) return null;
 
-    if (updatedLine === line) return null;
-
-    const nextText = `${text.slice(0, lineStart)}${updatedLine}${text.slice(lineEnd)}`;
-    const delta = updatedLine.length - line.length;
+    const nextText = `${text.slice(0, lineStart)}${updatedBlock}${text.slice(lineEnd)}`;
     return {
       text: nextText,
-      selectionStart: Math.max(lineStart, start + delta),
-      selectionEnd: Math.max(lineStart, end + delta)
+      selectionStart: Math.max(lineStart, start + firstDelta),
+      selectionEnd: Math.max(lineStart, end + totalDelta)
     };
   });
 }
@@ -3461,6 +3873,16 @@ function handleRawListContinuationKeydown(event) {
     const caret = selStart + replacement.length;
     return { text: nextText, selectionStart: caret, selectionEnd: caret };
   });
+}
+
+function handleRawEditorKeydown(event) {
+  if (event.key === 'Tab' && !event.metaKey && !event.ctrlKey && !event.altKey) {
+    event.preventDefault();
+    applyFormatAction(event.shiftKey ? 'format-decrease-indent' : 'format-increase-indent');
+    return;
+  }
+
+  handleRawListContinuationKeydown(event);
 }
 
 function runEditCommand(action) {
@@ -4394,19 +4816,28 @@ async function handleAction(action, payload = {}) {
       break;
 
     case 'mode-raw':
-      setViewVisibility(true, false);
+      setViewVisibility(true, false, false);
       break;
     case 'mode-formatted':
-      setViewVisibility(false, true);
+      setViewVisibility(false, true, false);
       break;
     case 'mode-split':
-      setViewVisibility(true, true);
+      setViewVisibility(true, true, false);
       break;
     case 'toggle-raw-view':
-      setViewVisibility(payload.enabled ?? !showRaw, showFormatted);
+      setViewVisibility(payload.enabled ?? !showRaw, showFormatted, showMindmap);
       break;
     case 'toggle-formatted-view':
-      setViewVisibility(showRaw, payload.enabled ?? !showFormatted);
+      setViewVisibility(showRaw, payload.enabled ?? !showFormatted, showMindmap);
+      break;
+    case 'toggle-mindmap-view':
+      setMindmapVisible(payload.enabled ?? !showMindmap);
+      break;
+    case 'set-mindmap-view':
+      setMindmapVisible(Boolean(payload.enabled));
+      break;
+    case 'set-mindmap-layout':
+      setMindmapLayout(payload.layout);
       break;
 
     case 'zoom-raw-in':
@@ -4432,6 +4863,28 @@ async function handleAction(action, payload = {}) {
     case 'zoom-formatted-reset':
       formattedZoom = 1;
       applyFormattedZoom();
+      break;
+    case 'zoom-mindmap-in':
+      mindmapZoom = Math.min(2.4, mindmapZoom + 0.12);
+      applyMindmapZoom();
+      publishSessionState();
+      break;
+    case 'zoom-mindmap-out':
+      mindmapZoom = Math.max(0.35, mindmapZoom - 0.12);
+      applyMindmapZoom();
+      publishSessionState();
+      break;
+    case 'zoom-mindmap-reset':
+      mindmapZoom = 1;
+      applyMindmapZoom();
+      publishSessionState();
+      break;
+    case 'zoom-mindmap-fit':
+      fitMindmapToView();
+      publishSessionState();
+      break;
+    case 'export-mindmap-svg':
+      await exportMindmapSvg();
       break;
 
     case 'load-theme':
@@ -4545,9 +4998,6 @@ async function handleAction(action, payload = {}) {
     case 'set-line-numbers':
       setLineNumbersEnabled(Boolean(payload.enabled));
       break;
-    case 'set-editor-font-family':
-      setEditorFontFamily(payload.family || '');
-      break;
     case 'toggle-mermaid-preview':
       setMermaidPreviewEnabled(!mermaidPreviewEnabled);
       break;
@@ -4590,12 +5040,6 @@ async function handleAction(action, payload = {}) {
       if (darkModeMode === 'auto') {
         setDarkMode(Boolean(payload.enabled), { persist: false });
       }
-      break;
-    case 'open-settings':
-      openSettings();
-      break;
-    case 'close-settings':
-      closeSettings();
       break;
     case 'edit-front-matter':
       openFrontMatterEditor();
@@ -4644,6 +5088,7 @@ function wireMenus() {
         const payload = {};
         if (button.dataset.preset) payload.preset = button.dataset.preset;
         if (button.dataset.mode) payload.mode = button.dataset.mode;
+        if (button.dataset.layout) payload.layout = button.dataset.layout;
         void handleAction(action, payload);
       }
     });
@@ -4669,6 +5114,49 @@ function wireMenus() {
       const slug = button.dataset.slug;
       const line = Number(button.dataset.line || 0);
       jumpToOutlineItem({ slug, line });
+    });
+  }
+
+  if (mindmapViewport) {
+    mindmapViewport.addEventListener('click', (event) => {
+      const target = event.target;
+      const node = target.closest?.('.mindmap-node[data-line]');
+      if (!node) return;
+      const line = Number(node.getAttribute('data-line') || 0);
+      focusMindmapNode(node.getAttribute('data-node-id'));
+      if (showRaw) scrollRawToLine(line);
+    });
+    mindmapViewport.addEventListener('focusin', (event) => {
+      const node = event.target.closest?.('.mindmap-node[data-node-id]');
+      if (node) focusMindmapNode(node.getAttribute('data-node-id'));
+    });
+    mindmapViewport.addEventListener('keydown', (event) => {
+      if (!['ArrowDown', 'ArrowRight', 'ArrowUp', 'ArrowLeft', 'Enter'].includes(event.key)) return;
+      const nodes = [...mindmapViewport.querySelectorAll('.mindmap-node')];
+      if (nodes.length === 0) return;
+      const currentIndex = Math.max(0, nodes.findIndex((node) => node.getAttribute('data-node-id') === focusedMindmapNodeId));
+      let nextIndex = currentIndex;
+      if (event.key === 'ArrowDown' || event.key === 'ArrowRight') nextIndex = Math.min(nodes.length - 1, currentIndex + 1);
+      if (event.key === 'ArrowUp' || event.key === 'ArrowLeft') nextIndex = Math.max(0, currentIndex - 1);
+      if (event.key === 'Enter') {
+        const line = Number(nodes[currentIndex].getAttribute('data-line') || 0);
+        if (showRaw) scrollRawToLine(line);
+        event.preventDefault();
+        return;
+      }
+      nodes[nextIndex].focus();
+      focusMindmapNode(nodes[nextIndex].getAttribute('data-node-id'));
+      event.preventDefault();
+    });
+    mindmapViewport.addEventListener('wheel', (event) => {
+      if (!event.metaKey && !event.ctrlKey) return;
+      event.preventDefault();
+      mindmapZoom = event.deltaY > 0 ? Math.max(0.35, mindmapZoom - 0.08) : Math.min(2.4, mindmapZoom + 0.08);
+      applyMindmapZoom();
+      publishSessionState();
+    }, { passive: false });
+    mindmapViewport.addEventListener('scroll', () => {
+      publishSessionState();
     });
   }
 
@@ -4747,9 +5235,9 @@ function wireKeyboardShortcuts() {
         closeLinkCheckModal();
         return;
       }
-      if (settingsModal && !settingsModal.classList.contains('hidden')) {
+      if (keybindingsModal && !keybindingsModal.classList.contains('hidden')) {
         event.preventDefault();
-        closeSettings();
+        closeKeybindingsModal();
         return;
       }
       if (versionHistoryModal && !versionHistoryModal.classList.contains('hidden')) {
@@ -4788,49 +5276,6 @@ function wireEvents() {
     invalidatePreviewAnchorCache();
     updateLineNumbers({ force: true });
   });
-  if (editorFontMenu) {
-    editorFontMenu.addEventListener('click', (event) => {
-      const target = event.target;
-      const button = target.closest('button[data-editor-font-family]');
-      if (!button) return;
-      setEditorFontFamily(button.dataset.editorFontFamily || '');
-      closeAllMenus();
-    });
-  }
-  if (settingsRibbonMode) {
-    settingsRibbonMode.addEventListener('change', () => setRibbonMode(settingsRibbonMode.value));
-  }
-  if (settingsThemeMode) {
-    settingsThemeMode.addEventListener('change', () => {
-      void setDarkModeMode(settingsThemeMode.value);
-    });
-  }
-  if (settingsEmbeddedMenu) {
-    settingsEmbeddedMenu.addEventListener('change', () => setEmbeddedMenu(settingsEmbeddedMenu.checked));
-  }
-  if (settingsEditorFont) {
-    settingsEditorFont.addEventListener('change', () => setEditorFontFamily(settingsEditorFont.value));
-  }
-  if (settingsWordWrap) {
-    settingsWordWrap.addEventListener('change', () => setWordWrapEnabled(settingsWordWrap.checked));
-  }
-  if (settingsLineNumbers) {
-    settingsLineNumbers.addEventListener('change', () => setLineNumbersEnabled(settingsLineNumbers.checked));
-  }
-  if (settingsSpellcheck) {
-    settingsSpellcheck.addEventListener('change', () => setSpellcheckEnabled(settingsSpellcheck.checked));
-  }
-  if (settingsDictionaryLanguage) {
-    settingsDictionaryLanguage.addEventListener('change', () => {
-      void setDictionaryLanguage(settingsDictionaryLanguage.value);
-    });
-  }
-  if (settingsMermaidPreview) {
-    settingsMermaidPreview.addEventListener('change', () => setMermaidPreviewEnabled(settingsMermaidPreview.checked));
-  }
-  if (settingsThemeDebug) {
-    settingsThemeDebug.addEventListener('change', () => setThemeDebugVisible(settingsThemeDebug.checked));
-  }
   if (typeof ResizeObserver !== 'undefined') {
     const rawEditorResizeObserver = new ResizeObserver(() => {
       updateLineNumbers({ force: true });
@@ -4894,7 +5339,7 @@ function wireEvents() {
     rawEditor.focus({ preventScroll: true });
     void importImagesAndInsert(files);
   });
-  rawEditor.addEventListener('keydown', handleRawListContinuationKeydown);
+  rawEditor.addEventListener('keydown', handleRawEditorKeydown);
   rawEditor.addEventListener('focus', () => {
     lastFocusedEditor = 'raw';
   });
@@ -4905,7 +5350,7 @@ function wireEvents() {
     void updateFrameCss();
     applyFrameTheme();
     const split = splitFrontMatter(markdownState);
-    patchFrameHtml(renderMarkdownBody(split.body, split.bodyLineOffset));
+    patchFrameHtml(md.render(split.body, { bodyLineOffset: split.bodyLineOffset || 0 }));
     scheduleFrameMermaidRender();
     applyFormattedZoom();
     applySpellcheckSetting();
@@ -4988,6 +5433,12 @@ function wireEvents() {
   }
 
   if (keybindingsList) {
+    keybindingsList.addEventListener('change', (event) => {
+      const target = event.target;
+      const input = target.closest?.('input[data-action]');
+      if (!input) return;
+      void saveKeybindingsFromEditor();
+    });
     keybindingsList.addEventListener('keydown', (event) => {
       const target = event.target;
       const input = target.closest('input[data-action]');
@@ -4995,8 +5446,46 @@ function wireEvents() {
       const combo = comboFromKeyboardEvent(event);
       if (!combo) return;
       event.preventDefault();
-      input.value = formatKeyComboForPlatform(combo);
+      input.value = combo;
     });
+  }
+
+  if (settingsRibbonDisplay) {
+    settingsRibbonDisplay.addEventListener('change', () => setRibbonMode(settingsRibbonDisplay.value));
+  }
+  if (settingsThemeMode) {
+    settingsThemeMode.addEventListener('change', () => {
+      void setDarkModeMode(settingsThemeMode.value);
+    });
+  }
+  if (settingsEmbeddedMenu) {
+    settingsEmbeddedMenu.addEventListener('change', () => setEmbeddedMenu(settingsEmbeddedMenu.checked));
+  }
+  if (settingsEditorFont) {
+    settingsEditorFont.addEventListener('change', () => setEditorFont(settingsEditorFont.value));
+  }
+  if (settingsWordWrap) {
+    settingsWordWrap.addEventListener('change', () => setWordWrapEnabled(settingsWordWrap.checked));
+  }
+  if (settingsLineNumbers) {
+    settingsLineNumbers.addEventListener('change', () => setLineNumbersEnabled(settingsLineNumbers.checked));
+  }
+  if (settingsSpellcheck) {
+    settingsSpellcheck.addEventListener('change', () => {
+      setSpellcheckEnabled(settingsSpellcheck.checked);
+      renderSettingsControls();
+    });
+  }
+  if (settingsDictionary) {
+    settingsDictionary.addEventListener('change', () => {
+      void setDictionaryLanguage(settingsDictionary.value);
+    });
+  }
+  if (settingsMermaidPreview) {
+    settingsMermaidPreview.addEventListener('change', () => setMermaidPreviewEnabled(settingsMermaidPreview.checked));
+  }
+  if (settingsThemeDebug) {
+    settingsThemeDebug.addEventListener('change', () => setThemeDebugVisible(settingsThemeDebug.checked));
   }
 
   if (versionHistoryList) {
@@ -5100,11 +5589,6 @@ function bootstrap() {
     setRibbonMode(savedRibbonMode, { persist: false });
     diagnosticLog('renderer.startup.ribbon-mode.loaded', { mode: savedRibbonMode });
 
-    const savedEditorFont = await loadEditorFontPreference();
-    setEditorFontFamily(savedEditorFont, { persist: false });
-    void populateEditorFontMenu();
-    diagnosticLog('renderer.startup.editor-font.loaded', { family: editorFontFamily || 'system' });
-
     const savedSyncViews = await loadSyncViewsPreference();
     setSyncViewsEnabled(savedSyncViews, { persist: false });
     diagnosticLog('renderer.startup.sync-views.loaded', { enabled: savedSyncViews });
@@ -5116,6 +5600,11 @@ function bootstrap() {
     const savedLineNumbers = await loadLineNumbersPreference();
     setLineNumbersEnabled(savedLineNumbers, { persist: false });
     diagnosticLog('renderer.startup.line-numbers.loaded', { enabled: savedLineNumbers });
+
+    const savedMindmap = await loadMindmapPreference();
+    setMindmapLayout(savedMindmap.layout, { persist: false });
+    setMindmapVisible(savedMindmap.enabled, { persist: false });
+    diagnosticLog('renderer.startup.mindmap.loaded', savedMindmap);
 
     const savedMermaidPreview = await loadMermaidPreviewPreference();
     setMermaidPreviewEnabled(savedMermaidPreview, { persist: false });
@@ -5139,7 +5628,7 @@ function bootstrap() {
     await loadSavedThemeOnStartup();
     diagnosticLog('renderer.startup.theme.loaded');
     const split = splitFrontMatter(markdownState);
-    patchFrameHtml(renderMarkdownBody(split.body, split.bodyLineOffset));
+    patchFrameHtml(md.render(split.body, { bodyLineOffset: split.bodyLineOffset || 0 }));
     scheduleFrameMermaidRender();
     applyFormattedZoom();
     updateThemeDebug();
