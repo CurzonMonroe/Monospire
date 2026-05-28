@@ -1,7 +1,7 @@
 {
   "name": "monospire",
   "productName": "Monospire",
-  "version": "2.0.0",
+  "version": "2.0.1",
   "description": "A focused Markdown editor",
   "main": "main.js",
   "scripts": {
@@ -33,7 +33,7 @@
   "build": {
     "appId": "com.monospire.app",
     "productName": "Monospire",
-    "buildVersion": "2.0.0.0",
+    "buildVersion": "2.0.1.0",
     "asar": false,
     "files": [
       "main.js",

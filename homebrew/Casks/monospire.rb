@@ -1,6 +1,6 @@
 cask "monospire" do
-  version "2.0.0"
-  sha256 "c436b0fabe6f8494ee4106de160ebdbb430a975870f54fcb2d43ec2c20cf914f"
+  version "2.0.1"
+  sha256 "fb0491001c23ec703f7232419e677306480cf409dc54790180f7835255e092f3"
 
   url "https://github.com/CurzonMonroe/Monospire/releases/download/v#{version}/Monospire-#{version}-arm64.dmg"
   name "Monospire"
