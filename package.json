@@ -6,7 +6,7 @@
   "main": "main.js",
   "scripts": {
     "start": "electron .",
-    "test": "node tests/mindmap-core.test.js && node tests/mmap-importer.test.js",
+    "test": "node tests/mindmap-core.test.js && node tests/mmap-importer.test.js && node tests/renderer-pane-layout.test.js",
     "pack:app": "bash ./scripts/package-app.sh",
     "pack:mac": "electron-builder --mac --dir",
     "dist:mac": "electron-builder --mac && npm run brew:cask",
@@ -42,6 +42,7 @@
       "mermaid-worker.js",
       "mindmap-core.js",
       "mmap-importer.js",
+      "renderer-pane-layout.js",
       "renderer.js",
       "index.html",
       "styles.css",
