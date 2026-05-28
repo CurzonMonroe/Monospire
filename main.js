@@ -11,6 +11,7 @@ const fsSync = require('fs');
 const crypto = require('crypto');
 const os = require('os');
 const { execFile } = require('child_process');
+const { importMindManagerBuffer } = require('./mmap-importer');
 
 app.setName('Monospire');
 let recentFilesCache = [];
@@ -365,14 +366,14 @@ function sendMenuAction(action, payload = {}) {
   window.webContents.send('menu-action', { action, payload });
 }
 
-function isMarkdownFilePath(filePath) {
+function isOpenableDocumentPath(filePath) {
   if (typeof filePath !== 'string' || !filePath.trim()) return false;
   const extension = path.extname(filePath).toLowerCase();
-  return extension === '.md' || extension === '.markdown' || extension === '.txt';
+  return extension === '.md' || extension === '.markdown' || extension === '.txt' || extension === '.mmap';
 }
 
 function enqueueOpenFilePath(filePath) {
-  if (!isMarkdownFilePath(filePath)) return;
+  if (!isOpenableDocumentPath(filePath)) return;
   const resolved = path.resolve(filePath);
   if (!fsSync.existsSync(resolved)) return;
   if (pendingOpenFilePaths.includes(resolved)) return;
@@ -1735,6 +1736,47 @@ ipcMain.on('diagnostic-log', (event, payload) => {
   });
 });
 
+function isMindManagerMapPath(filePath) {
+  return path.extname(String(filePath || '')).toLowerCase() === '.mmap';
+}
+
+function importedMindManagerName(filePath) {
+  const baseName = path.basename(filePath, path.extname(filePath)) || 'Imported MindManager Map';
+  return `${baseName}.md`;
+}
+
+async function openMindManagerMap(filePath) {
+  const buffer = await fs.readFile(filePath);
+  const stats = await fs.stat(filePath);
+  const imported = importMindManagerBuffer(buffer, { sourceName: filePath });
+  return {
+    path: null,
+    sourcePath: filePath,
+    name: importedMindManagerName(filePath),
+    content: imported.markdown,
+    imported: true,
+    importedFormat: 'mindmanager-mmap',
+    entryCount: imported.entryCount,
+    lastSavedAt: stats?.mtime ? stats.mtime.toISOString() : null
+  };
+}
+
+function openMindManagerMapSync(filePath) {
+  const buffer = fsSync.readFileSync(filePath);
+  const stats = fsSync.statSync(filePath);
+  const imported = importMindManagerBuffer(buffer, { sourceName: filePath });
+  return {
+    path: null,
+    sourcePath: filePath,
+    name: importedMindManagerName(filePath),
+    content: imported.markdown,
+    imported: true,
+    importedFormat: 'mindmanager-mmap',
+    entryCount: imported.entryCount,
+    lastSavedAt: stats?.mtime ? stats.mtime.toISOString() : null
+  };
+}
+
 ipcMain.on('mermaid-worker-ready', () => {
   mermaidWorkerReady = true;
   logDiagnostics('mermaid.worker.ready');
@@ -2395,10 +2437,12 @@ ipcMain.on('choose-template-file-sync', (event) => {
 
 ipcMain.handle('file-open', async () => {
   const result = await dialog.showOpenDialog({
-    title: 'Open Markdown File',
+    title: 'Open Markdown or MindManager File',
     properties: ['openFile'],
     filters: [
+      { name: 'Documents', extensions: ['md', 'markdown', 'txt', 'mmap'] },
       { name: 'Markdown', extensions: ['md', 'markdown', 'txt'] },
+      { name: 'MindManager Maps', extensions: ['mmap'] },
       { name: 'All Files', extensions: ['*'] }
     ]
   });
@@ -2406,6 +2450,9 @@ ipcMain.handle('file-open', async () => {
   if (result.canceled || result.filePaths.length === 0) return null;
 
   const filePath = result.filePaths[0];
+  if (isMindManagerMapPath(filePath)) {
+    return await openMindManagerMap(filePath);
+  }
   const content = await fs.readFile(filePath, 'utf8');
   const stats = await fs.stat(filePath);
 
@@ -2422,6 +2469,9 @@ ipcMain.handle('file-open-path', async (_event, payload) => {
   if (!filePath) return null;
 
   try {
+    if (isMindManagerMapPath(filePath)) {
+      return await openMindManagerMap(filePath);
+    }
     const content = await fs.readFile(filePath, 'utf8');
     const stats = await fs.stat(filePath);
     return {
@@ -2555,10 +2605,12 @@ ipcMain.handle('file-save-as', async (_event, payload) => {
 ipcMain.on('file-open-sync', (event) => {
   try {
     const filePaths = dialog.showOpenDialogSync({
-      title: 'Open Markdown File',
+      title: 'Open Markdown or MindManager File',
       properties: ['openFile'],
       filters: [
+        { name: 'Documents', extensions: ['md', 'markdown', 'txt', 'mmap'] },
         { name: 'Markdown', extensions: ['md', 'markdown', 'txt'] },
+        { name: 'MindManager Maps', extensions: ['mmap'] },
         { name: 'All Files', extensions: ['*'] }
       ]
     });
@@ -2569,6 +2621,10 @@ ipcMain.on('file-open-sync', (event) => {
     }
 
     const filePath = filePaths[0];
+    if (isMindManagerMapPath(filePath)) {
+      event.returnValue = openMindManagerMapSync(filePath);
+      return;
+    }
     const content = fsSync.readFileSync(filePath, 'utf8');
     const stats = fsSync.statSync(filePath);
     event.returnValue = {

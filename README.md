@@ -151,6 +151,8 @@ Supported optional metadata uses Markdown comments immediately after or inside a
 
 Mindmap export is available from the File menu and the Mindmap toolbar.
 
+Monospire can also open MindManager `.mmap` files as an import. The original `.mmap` file is left untouched; Monospire converts the topic tree into a new unsaved Markdown document so it can be reviewed, edited, and saved as normal Markdown.
+
 ## Development
 
 Install dependencies:

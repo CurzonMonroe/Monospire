@@ -6,7 +6,7 @@
   "main": "main.js",
   "scripts": {
     "start": "electron .",
-    "test": "node tests/mindmap-core.test.js",
+    "test": "node tests/mindmap-core.test.js && node tests/mmap-importer.test.js",
     "pack:app": "bash ./scripts/package-app.sh",
     "pack:mac": "electron-builder --mac --dir",
     "dist:mac": "electron-builder --mac && npm run brew:cask",
@@ -41,6 +41,7 @@
       "mermaid-worker.html",
       "mermaid-worker.js",
       "mindmap-core.js",
+      "mmap-importer.js",
       "renderer.js",
       "index.html",
       "styles.css",
@@ -93,6 +94,12 @@
         "ext": "markdown",
         "name": "Markdown Document",
         "role": "Editor",
+        "icon": "assets/Monospire.icns"
+      },
+      {
+        "ext": "mmap",
+        "name": "MindManager Map",
+        "role": "Viewer",
         "icon": "assets/Monospire.icns"
       }
     ]

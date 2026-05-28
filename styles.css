@@ -458,10 +458,11 @@ body.ribbon-text .ribbon-button {
 
 .workspace {
   display: grid;
-  gap: 10px;
+  gap: 4px;
   height: 100%;
   min-height: 0;
   position: relative;
+  align-items: stretch;
 }
 
 .pane {
@@ -471,6 +472,42 @@ body.ribbon-text .ribbon-button {
   border-radius: 11px;
   background: var(--surface);
   overflow: hidden;
+}
+
+.pane-splitter {
+  display: none;
+  width: 3px;
+  min-width: 3px;
+  align-self: stretch;
+  border-radius: 6px;
+  cursor: col-resize;
+  background: transparent;
+  position: relative;
+}
+
+.pane-splitter::before {
+  content: "";
+  position: absolute;
+  top: 38px;
+  bottom: 38px;
+  left: 1px;
+  width: 1px;
+  border-radius: 999px;
+  background: transparent;
+}
+
+.pane-splitter:hover::before,
+.pane-splitter.active::before {
+  background: color-mix(in srgb, var(--accent) 58%, var(--chrome-border));
+}
+
+body.resizing-panes {
+  cursor: col-resize;
+  user-select: none;
+}
+
+body.resizing-panes iframe {
+  pointer-events: none;
 }
 
 .pane-header {

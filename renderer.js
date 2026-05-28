@@ -546,6 +546,8 @@ turndown.addRule('fencedCodeBlocks', {
 const body = document.body;
 const workspace = document.getElementById('workspace');
 const menuBar = document.getElementById('menu-bar');
+const rawPane = document.getElementById('raw-pane');
+const formattedPane = document.getElementById('formatted-pane');
 const rawEditor = document.getElementById('raw-editor');
 const rawEditorShell = document.getElementById('raw-editor-shell');
 const rawLineNumberList = document.getElementById('raw-line-number-list');
@@ -554,6 +556,7 @@ const mindmapPane = document.getElementById('mindmap-pane');
 const mindmapViewport = document.getElementById('mindmap-viewport');
 const mindmapCanvas = document.getElementById('mindmap-canvas');
 const mindmapDiagnostics = document.getElementById('mindmap-diagnostics');
+const paneSplitters = [...document.querySelectorAll('.pane-splitter[data-splitter]')];
 const titlebarText = document.getElementById('titlebar-text');
 const themeDebug = document.getElementById('theme-debug');
 const ribbonThemeModeButtons = [...document.querySelectorAll('[data-theme-mode]')];
@@ -620,6 +623,7 @@ let mindmapZoom = 1;
 let mindmapLayout = 'balanced';
 let ribbonMode = 'both';
 let splitOrientation = 'horizontal';
+let paneSizeWeights = { raw: 1, formatted: 1, mindmap: 1 };
 let spellcheckEnabled = true;
 let dictionaryLanguage = 'en-US';
 let listContinuationMode = null;
@@ -1128,6 +1132,7 @@ function buildSessionStatePayload() {
       showMindmap,
       mindmapZoom,
       mindmapLayout,
+      paneSizeWeights,
       mindmapScrollLeft: mindmapViewport ? mindmapViewport.scrollLeft : 0,
       mindmapScrollTop: mindmapViewport ? mindmapViewport.scrollTop : 0,
       splitOrientation,
@@ -1153,6 +1158,7 @@ function applySessionState(state) {
   savedBaseline = typeof state.savedBaseline === 'string' ? state.savedBaseline : markdownState;
   lastSavedAt = state.lastSavedAt || null;
   docSessionKey = state.docSessionKey || docSessionKey;
+  paneSizeWeights = normalizePaneSizeWeights(state.paneSizeWeights);
   setViewVisibility(state.showRaw !== false, state.showFormatted !== false, state.showMindmap === true);
   mindmapZoom = Number.isFinite(state.mindmapZoom) ? Math.max(0.35, Math.min(2.4, state.mindmapZoom)) : 1;
   mindmapLayout = normalizeMindmapLayout(state.mindmapLayout);
@@ -1865,13 +1871,14 @@ function renderMindmapSvg(layout, diagnostics = []) {
       }));
     }
 
-    let textX = item.x + 16;
+    let textX = item.x + item.width / 2;
+    let textAnchor = 'middle';
     if (node.metadata.image) {
       appendMindmapImage(group, node, item.x + 12, item.y + 10);
-      textX += 42;
+      textX = item.x + 54 + ((item.width - 66) / 2);
     } else if (node.metadata.icon || node.taskState) {
       appendMindmapIcon(group, node.metadata.icon || (node.taskState === 'checked' ? 'check' : 'note'), item.x + 24, item.y + item.height / 2, item.colour);
-      textX += 24;
+      textX = item.x + 42 + ((item.width - 54) / 2);
     }
 
     const lines = wrapMindmapLabel(node.label, node.depth === 0 ? 22 : 24, node.metadata.image ? 2 : 3);
@@ -1881,6 +1888,7 @@ function renderMindmapSvg(layout, diagnostics = []) {
         x: textX,
         y: startY + i * 16,
         class: 'mindmap-node-text',
+        'text-anchor': textAnchor,
         'dominant-baseline': 'central',
         style: `fill:${nodeTextColour}`
       });
@@ -2251,6 +2259,128 @@ function applySplitOrientation() {
   workspace.classList.remove('split-horizontal', 'split-vertical');
   workspace.classList.add(splitOrientation === 'vertical' ? 'split-vertical' : 'split-horizontal');
   invalidatePreviewAnchorCache();
+  applyPaneSizing();
+}
+
+function normalizePaneSizeWeights(value) {
+  const source = value && typeof value === 'object' ? value : {};
+  const next = {};
+  for (const key of ['raw', 'formatted', 'mindmap']) {
+    const numeric = Number(source[key]);
+    next[key] = Number.isFinite(numeric) && numeric > 0 ? Math.max(0.25, Math.min(8, numeric)) : 1;
+  }
+  return next;
+}
+
+function getVisiblePaneKeys() {
+  const keys = [];
+  if (showRaw) keys.push('raw');
+  if (showFormatted) keys.push('formatted');
+  if (showMindmap) keys.push('mindmap');
+  return keys;
+}
+
+function paneElementForKey(key) {
+  if (key === 'raw') return rawPane;
+  if (key === 'formatted') return formattedPane;
+  if (key === 'mindmap') return mindmapPane;
+  return null;
+}
+
+function splitterForPanePair(leftKey, rightKey) {
+  const pair = `${leftKey}-${rightKey}`;
+  return paneSplitters.find((splitter) => splitter.dataset.splitter === pair) || null;
+}
+
+function applyPaneSizing() {
+  if (!workspace) return;
+  const visibleKeys = getVisiblePaneKeys();
+  const horizontal = splitOrientation !== 'vertical';
+
+  for (const [index, key] of visibleKeys.entries()) {
+    const pane = paneElementForKey(key);
+    if (pane) pane.style.order = String(index * 2);
+  }
+
+  for (const splitter of paneSplitters) {
+    splitter.style.display = 'none';
+    splitter.classList.remove('active');
+  }
+
+  if (!horizontal || visibleKeys.length <= 1) {
+    workspace.style.removeProperty('grid-template-columns');
+    workspace.style.removeProperty('grid-template-rows');
+    return;
+  }
+
+  const columns = [];
+  for (let index = 0; index < visibleKeys.length; index += 1) {
+    const key = visibleKeys[index];
+    columns.push(`minmax(180px, ${paneSizeWeights[key] || 1}fr)`);
+    if (index < visibleKeys.length - 1) {
+      const splitter = splitterForPanePair(key, visibleKeys[index + 1]);
+      if (splitter) {
+        splitter.style.display = 'block';
+        splitter.style.order = String(index * 2 + 1);
+      }
+      columns.push('3px');
+    }
+  }
+
+  workspace.style.gridTemplateColumns = columns.join(' ');
+  workspace.style.removeProperty('grid-template-rows');
+}
+
+function resizePaneWeights(leftKey, rightKey, deltaX) {
+  const leftPane = paneElementForKey(leftKey);
+  const rightPane = paneElementForKey(rightKey);
+  if (!leftPane || !rightPane) return;
+
+  const leftWidth = leftPane.getBoundingClientRect().width;
+  const rightWidth = rightPane.getBoundingClientRect().width;
+  const totalWidth = Math.max(1, leftWidth + rightWidth);
+  const minWidth = Math.min(220, Math.max(140, totalWidth * 0.18));
+  const nextLeft = Math.max(minWidth, Math.min(totalWidth - minWidth, leftWidth + deltaX));
+  const nextRight = totalWidth - nextLeft;
+  const pairWeightTotal = (paneSizeWeights[leftKey] || 1) + (paneSizeWeights[rightKey] || 1);
+  paneSizeWeights = {
+    ...paneSizeWeights,
+    [leftKey]: (nextLeft / totalWidth) * pairWeightTotal,
+    [rightKey]: (nextRight / totalWidth) * pairWeightTotal
+  };
+  applyPaneSizing();
+  scheduleMindmapRender();
+  publishSessionState();
+}
+
+function beginPaneResize(event, splitter) {
+  if (splitOrientation === 'vertical') return;
+  const visibleKeys = getVisiblePaneKeys();
+  const [leftKey, rightKey] = String(splitter.dataset.splitter || '').split('-');
+  const leftIndex = visibleKeys.indexOf(leftKey);
+  if (leftIndex < 0 || visibleKeys[leftIndex + 1] !== rightKey) return;
+
+  event.preventDefault();
+  splitter.classList.add('active');
+  body.classList.add('resizing-panes');
+  let lastX = event.clientX;
+
+  const onPointerMove = (moveEvent) => {
+    const deltaX = moveEvent.clientX - lastX;
+    lastX = moveEvent.clientX;
+    resizePaneWeights(leftKey, rightKey, deltaX);
+  };
+
+  const onPointerUp = () => {
+    splitter.classList.remove('active');
+    body.classList.remove('resizing-panes');
+    window.removeEventListener('pointermove', onPointerMove);
+    window.removeEventListener('pointerup', onPointerUp);
+    publishSessionState();
+  };
+
+  window.addEventListener('pointermove', onPointerMove);
+  window.addEventListener('pointerup', onPointerUp, { once: true });
 }
 
 function updateListModeButtons() {
@@ -4350,20 +4480,20 @@ function runReplaceDialog() {
 }
 
 function applyLoadedDocument(loaded) {
-  currentFilePath = loaded.path;
-  currentFileName = loaded.name || basename(loaded.path);
-  docSessionKey = loaded.path || docSessionKey;
+  currentFilePath = loaded.imported ? null : loaded.path;
+  currentFileName = loaded.name || (loaded.path ? basename(loaded.path) : 'Untitled.md');
+  docSessionKey = loaded.path || loaded.sourcePath || docSessionKey;
   markdownState = loaded.content;
   lastSavedAt = loaded.lastSavedAt || null;
   rawEditor.value = markdownState;
   updateLineNumbers({ force: true });
 
   renderFromMarkdown(markdownState);
-  savedBaseline = markdownState;
+  savedBaseline = loaded.imported ? '' : markdownState;
   rawUndoStack.length = 0;
   rawRedoStack.length = 0;
   syncRawSnapshot();
-  setDirty(false);
+  setDirty(Boolean(loaded.imported));
   updateWindowTitle();
   publishSessionState();
 }
@@ -4376,7 +4506,7 @@ async function loadFileFromDisk() {
   if (!loaded) return;
 
   applyLoadedDocument(loaded);
-  await addRecentFile(loaded.path);
+  await addRecentFile(loaded.sourcePath || loaded.path);
 }
 
 async function loadRecentFile(filePath) {
@@ -4391,7 +4521,7 @@ async function loadRecentFile(filePath) {
   }
 
   applyLoadedDocument(loaded);
-  await addRecentFile(loaded.path);
+  await addRecentFile(loaded.sourcePath || loaded.path);
 }
 
 async function loadFileByPath(filePath, context = 'opening a file') {
@@ -4407,7 +4537,7 @@ async function loadFileByPath(filePath, context = 'opening a file') {
   }
 
   applyLoadedDocument(loaded);
-  await addRecentFile(loaded.path);
+  await addRecentFile(loaded.sourcePath || loaded.path);
 }
 
 async function createNewDocument(options = {}) {
@@ -4485,7 +4615,7 @@ async function saveCurrentFile(saveAs = false, options = {}) {
 
   const renderedHtml = await renderMarkdownForExport(markdownState);
   const payload = {
-    path: currentFilePath,
+    path: saveAs ? (currentFilePath || currentFileName) : currentFilePath,
     content: markdownState,
     renderedHtml,
     themeCssText: buildExportThemeCss(),
@@ -5158,6 +5288,10 @@ function wireMenus() {
     mindmapViewport.addEventListener('scroll', () => {
       publishSessionState();
     });
+  }
+
+  for (const splitter of paneSplitters) {
+    splitter.addEventListener('pointerdown', (event) => beginPaneResize(event, splitter));
   }
 
   if (paletteInput) {
