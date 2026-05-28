@@ -532,6 +532,11 @@ body.resizing-panes iframe {
   background: linear-gradient(180deg, #fffaf0 0%, #fff4df 100%);
 }
 
+.pane-header-outline {
+  color: #4f7b18;
+  background: linear-gradient(180deg, #f7fceb 0%, #edf7d7 100%);
+}
+
 body.dark-content .pane-header-markdown {
   color: #73d7df;
   background: linear-gradient(180deg, #1e373b 0%, #172d31 100%);
@@ -540,6 +545,11 @@ body.dark-content .pane-header-markdown {
 body.dark-content .pane-header-preview {
   color: #ffc06e;
   background: linear-gradient(180deg, #3b3020 0%, #302616 100%);
+}
+
+body.dark-content .pane-header-outline {
+  color: #bce47b;
+  background: linear-gradient(180deg, #2d3a20 0%, #243116 100%);
 }
 
 .raw-editor-shell {
@@ -860,17 +870,13 @@ body.dark-content .mindmap-viewport {
 }
 
 .toc-header {
-  font-size: 11px;
-  font-weight: 600;
-  color: var(--text-muted);
-  padding: 10px 12px 6px 12px;
-  border-bottom: 1px solid var(--chrome-border);
+  min-height: 30px;
 }
 
 .toc-list {
   padding: 6px;
   overflow: auto;
-  height: calc(100% - 34px);
+  min-height: 0;
 }
 
 .toc-item {
