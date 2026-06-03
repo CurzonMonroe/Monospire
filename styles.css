@@ -910,8 +910,7 @@ body.dark-content .pane-toc {
 }
 
 body.dark-content .toc-header {
-  color: #c3cad9;
-  border-bottom-color: #3f434b;
+  border-bottom-color: var(--chrome-border);
 }
 
 body.dark-content .toc-item {
