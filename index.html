@@ -110,6 +110,11 @@
             <button data-action="outline-left" data-toggle="outline-left">Outline Left</button>
             <button data-action="outline-right" data-toggle="outline-right">Outline Right</button>
             <div class="menu-separator"></div>
+            <button data-action="toggle-notes-tree-view" data-toggle="notes-tree-view">Show Notes Tree</button>
+            <button data-action="notes-tree-left" data-toggle="notes-tree-left">Notes Tree Left</button>
+            <button data-action="notes-tree-right" data-toggle="notes-tree-right">Notes Tree Right</button>
+            <button data-action="choose-notes-tree-root">Choose Notes Folder...</button>
+            <div class="menu-separator"></div>
             <button data-action="horizontal-view" data-toggle="horizontal-view">Horizontal View</button>
             <button data-action="vertical-view" data-toggle="vertical-view">Vertical View</button>
           </div>
@@ -263,6 +268,15 @@
           <div class="toc-header pane-header pane-header-outline">Outline</div>
           <div id="toc-list" class="toc-list"></div>
         </aside>
+
+        <aside id="notes-tree-pane" class="pane pane-notes-tree no-drag" aria-label="Notes tree">
+          <div class="notes-tree-header pane-header pane-header-notes-tree">
+            <span>Notes</span>
+          </div>
+          <div id="notes-tree-root" class="notes-tree-root"></div>
+          <div id="notes-tree-list" class="notes-tree-list"></div>
+          <div id="notes-tree-resizer" class="notes-tree-resizer" role="separator" aria-orientation="vertical" aria-label="Resize notes tree"></div>
+        </aside>
       </main>
 
       <footer class="status-bar no-drag" id="status-bar">
@@ -395,6 +409,23 @@
           <div class="version-history-actions">
             <button data-action="restore-selected-snapshot">Restore Selected</button>
             <button data-action="close-version-history">Close</button>
+          </div>
+        </div>
+      </div>
+
+      <div id="folder-emoji-modal" class="overlay-panel hidden no-drag" role="dialog" aria-modal="true" aria-label="Folder Emoji">
+        <div class="overlay-backdrop" data-action="close-folder-emoji"></div>
+        <div class="folder-emoji-sheet">
+          <div class="folder-emoji-header">Folder Emoji</div>
+          <div class="folder-emoji-body">
+            <label class="folder-emoji-label" for="folder-emoji-input">Emoji decoration</label>
+            <input id="folder-emoji-input" class="folder-emoji-input" type="text" maxlength="8" autocomplete="off" />
+            <div class="folder-emoji-hint">Enter one emoji. Leave blank to remove it.</div>
+          </div>
+          <div class="folder-emoji-actions">
+            <button data-action="clear-folder-emoji">Clear</button>
+            <button data-action="save-folder-emoji">Save</button>
+            <button data-action="close-folder-emoji">Cancel</button>
           </div>
         </div>
       </div>
