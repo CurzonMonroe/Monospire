@@ -104,6 +104,7 @@
             <button data-action="toggle-sync-views" data-toggle="sync-views">Syncronise Views</button>
             <button data-action="toggle-word-wrap" data-toggle="word-wrap">Word Wrap</button>
             <button data-action="toggle-line-numbers" data-toggle="line-numbers">Line Numbers</button>
+            <button data-action="toggle-continue-prefixes" data-toggle="continue-prefixes">Continue Lists and Quotes</button>
             <div class="menu-separator"></div>
             <button data-action="toggle-outline-view" data-toggle="outline-view">Show Outline</button>
             <button data-action="outline-left" data-toggle="outline-left">Outline Left</button>
@@ -177,6 +178,10 @@
             <img src="./assets/sf-symbols/quote.opening.png" alt="" aria-hidden="true" />
             <span>Quote</span>
           </button>
+          <button class="ribbon-button" data-action="show-callout-menu" title="Callout">
+            <i class="ribbon-mask-icon ribbon-callout-icon" aria-hidden="true"></i>
+            <span>Callout</span>
+          </button>
           <button class="ribbon-button" data-action="format-code-block" title="Code Block">
             <img src="./assets/sf-symbols/chevron.left.forwardslash.chevron.right.png" alt="" aria-hidden="true" />
             <span>Code Block</span>
@@ -207,6 +212,14 @@
           </button>
         </div>
       </section>
+
+      <div id="callout-menu" class="ribbon-popover no-drag hidden" role="menu" aria-label="Callout type">
+        <button type="button" data-action="format-callout" data-callout="note" role="menuitem">Note</button>
+        <button type="button" data-action="format-callout" data-callout="tip" role="menuitem">Tip</button>
+        <button type="button" data-action="format-callout" data-callout="important" role="menuitem">Important</button>
+        <button type="button" data-action="format-callout" data-callout="warning" role="menuitem">Warning</button>
+        <button type="button" data-action="format-callout" data-callout="caution" role="menuitem">Caution</button>
+      </div>
 
       <div id="theme-debug" class="theme-debug no-drag">Theme debug: waiting...</div>
 
@@ -349,6 +362,7 @@
               </select>
               <label class="settings-check"><input id="settings-word-wrap" type="checkbox" /> Word wrap</label>
               <label class="settings-check"><input id="settings-line-numbers" type="checkbox" /> Line numbers</label>
+              <label class="settings-check"><input id="settings-continue-prefixes" type="checkbox" /> Continue lists and quotes on Return</label>
             </section>
             <section class="settings-card" aria-label="Proofing settings">
               <div class="settings-card-title">Proofing</div>

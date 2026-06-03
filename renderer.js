@@ -1,11 +1,13 @@
 const MarkdownIt = require('markdown-it');
+const markdownItFootnote = require('markdown-it-footnote');
 const TurndownService = require('turndown');
 const morphdom = require('morphdom');
+const katex = require('katex');
 const path = require('path');
 const fs = require('fs/promises');
 const fsSync = require('fs');
 const os = require('os');
-const { pathToFileURL } = require('url');
+const { fileURLToPath, pathToFileURL } = require('url');
 const {
   normalizeMindmapLayout
 } = require('./mindmap-core');
@@ -23,6 +25,18 @@ const md = new MarkdownIt({
   typographer: true,
   breaks: true
 });
+md.use(markdownItFootnote);
+
+let katexCssText = '';
+try {
+  const katexCssPath = require.resolve('katex/dist/katex.min.css');
+  const katexCssDir = path.dirname(katexCssPath);
+  katexCssText = fsSync
+    .readFileSync(katexCssPath, 'utf8')
+    .replace(/url\((fonts\/[^)]+)\)/g, (_match, fontPath) => `url("${pathToFileURL(path.join(katexCssDir, fontPath)).href}")`);
+} catch {
+  katexCssText = '';
+}
 
 const defaultFenceRenderer =
   md.renderer.rules.fence ||
@@ -450,6 +464,217 @@ md.inline.ruler.before('emphasis', 'mark', (state, silent) => {
   return true;
 });
 
+md.inline.ruler.before('escape', 'inline_math', (state, silent) => {
+  const start = state.pos;
+  const src = state.src;
+  if (src.charCodeAt(start) !== 0x24) return false;
+  if (src.charCodeAt(start + 1) === 0x24) return false;
+  if (start > 0 && src.charCodeAt(start - 1) === 0x5c) return false;
+
+  let end = start + 1;
+  while (end < src.length) {
+    if (src.charCodeAt(end) === 0x24 && src.charCodeAt(end - 1) !== 0x5c) break;
+    end += 1;
+  }
+  if (end >= src.length || end === start + 1) return false;
+  const content = src.slice(start + 1, end);
+  if (/^\s|\s$/.test(content) || content.includes('\n')) return false;
+  if (silent) return false;
+
+  const token = state.push('math_inline', 'span', 0);
+  token.content = content;
+  state.pos = end + 1;
+  return true;
+});
+
+function markdownLineText(state, line) {
+  return state.src.slice(state.bMarks[line] + state.tShift[line], state.eMarks[line]);
+}
+
+function isDefinitionLine(value) {
+  return /^\s{0,3}:\s*(.*)$/.exec(value || '');
+}
+
+function hasDefinitionPair(state, line, endLine) {
+  if (line + 1 >= endLine) return false;
+  const term = markdownLineText(state, line).trim();
+  if (!term) return false;
+  return Boolean(isDefinitionLine(markdownLineText(state, line + 1)));
+}
+
+md.block.ruler.before('paragraph', 'definition_list', (state, startLine, endLine, silent) => {
+  if (!hasDefinitionPair(state, startLine, endLine)) return false;
+  if (silent) return true;
+
+  const listOpen = state.push('dl_open', 'dl', 1);
+  listOpen.map = [startLine, startLine];
+  let line = startLine;
+
+  while (line < endLine && hasDefinitionPair(state, line, endLine)) {
+    const term = markdownLineText(state, line).trim();
+    const termOpen = state.push('dt_open', 'dt', 1);
+    termOpen.map = [line, line + 1];
+    const termInline = state.push('inline', '', 0);
+    termInline.content = term;
+    termInline.map = [line, line + 1];
+    termInline.children = [];
+    state.push('dt_close', 'dt', -1);
+    line += 1;
+
+    while (line < endLine) {
+      const definitionMatch = isDefinitionLine(markdownLineText(state, line));
+      if (!definitionMatch) break;
+      const definition = definitionMatch[1].trim();
+      const definitionOpen = state.push('dd_open', 'dd', 1);
+      definitionOpen.map = [line, line + 1];
+      const paragraphOpen = state.push('paragraph_open', 'p', 1);
+      paragraphOpen.map = [line, line + 1];
+      const definitionInline = state.push('inline', '', 0);
+      definitionInline.content = definition;
+      definitionInline.map = [line, line + 1];
+      definitionInline.children = [];
+      state.push('paragraph_close', 'p', -1);
+      state.push('dd_close', 'dd', -1);
+      line += 1;
+
+      if (line < endLine && markdownLineText(state, line).trim() === '') {
+        const nextPairLine = line + 1;
+        if (hasDefinitionPair(state, nextPairLine, endLine)) {
+          line = nextPairLine;
+        }
+        break;
+      }
+
+      if (hasDefinitionPair(state, line, endLine)) break;
+      if (line >= endLine || !isDefinitionLine(markdownLineText(state, line))) break;
+    }
+    if (line < endLine && markdownLineText(state, line).trim() === '') break;
+  }
+
+  listOpen.map[1] = line;
+  state.push('dl_close', 'dl', -1);
+  state.line = line;
+  return true;
+});
+
+md.block.ruler.before('fence', 'math_block', (state, startLine, endLine, silent) => {
+  const firstLine = markdownLineText(state, startLine).trim();
+  if (firstLine !== '$$') return false;
+
+  let nextLine = startLine + 1;
+  while (nextLine < endLine) {
+    if (markdownLineText(state, nextLine).trim() === '$$') break;
+    nextLine += 1;
+  }
+  if (nextLine >= endLine) return false;
+  if (silent) return true;
+
+  const token = state.push('math_block', 'div', 0);
+  token.block = true;
+  token.content = state.src
+    .split(/\r?\n/)
+    .slice(startLine + 1, nextLine)
+    .join('\n')
+    .trim();
+  token.map = [startLine, nextLine + 1];
+  state.line = nextLine + 1;
+  return true;
+});
+
+md.core.ruler.after('inline', 'task_list_items', (state) => {
+  const tokens = state.tokens || [];
+  for (let index = 0; index < tokens.length; index += 1) {
+    const token = tokens[index];
+    if (token.type !== 'inline' || !Array.isArray(token.children) || token.children.length === 0) continue;
+    if (tokens[index - 1]?.type !== 'paragraph_open') continue;
+
+    let listItemOpen = null;
+    for (let cursor = index - 2; cursor >= 0; cursor -= 1) {
+      if (tokens[cursor].type === 'list_item_close') break;
+      if (tokens[cursor].type === 'list_item_open') {
+        listItemOpen = tokens[cursor];
+        break;
+      }
+    }
+    if (!listItemOpen) continue;
+
+    const firstChild = token.children[0];
+    if (firstChild.type !== 'text') continue;
+    const match = firstChild.content.match(/^\[([ xX])]\s+/);
+    if (!match) continue;
+
+    const checked = match[1].toLowerCase() === 'x';
+    firstChild.content = firstChild.content.slice(match[0].length);
+    const checkbox = new state.Token('task_checkbox', 'span', 0);
+    const sourceLine = Array.isArray(token.map) ? token.map[0] + (state.env?.bodyLineOffset || 0) : null;
+    checkbox.meta = { checked, sourceLine };
+    token.children.unshift(checkbox);
+    listItemOpen.attrJoin('class', 'task-list-item');
+    listItemOpen.attrJoin('class', checked ? 'task-list-item-checked' : 'task-list-item-unchecked');
+  }
+});
+
+const CALLOUT_TYPES = {
+  note: 'Note',
+  tip: 'Tip',
+  important: 'Important',
+  warning: 'Warning',
+  caution: 'Caution'
+};
+
+md.core.ruler.after('task_list_items', 'github_callouts', (state) => {
+  const tokens = state.tokens || [];
+  for (let index = 0; index < tokens.length; index += 1) {
+    const blockquote = tokens[index];
+    if (blockquote.type !== 'blockquote_open') continue;
+    const paragraph = tokens[index + 1];
+    const inline = tokens[index + 2];
+    if (paragraph?.type !== 'paragraph_open' || inline?.type !== 'inline') continue;
+    if (!Array.isArray(inline.children) || inline.children.length === 0) continue;
+
+    const firstChild = inline.children[0];
+    if (firstChild.type !== 'text') continue;
+    const match = firstChild.content.match(/^\[!(NOTE|TIP|IMPORTANT|WARNING|CAUTION)]\s*/i);
+    if (!match) continue;
+
+    const type = match[1].toLowerCase();
+    firstChild.content = firstChild.content.slice(match[0].length);
+    if (!firstChild.content && inline.children[1]?.type === 'softbreak') {
+      inline.children.splice(0, 2);
+    } else if (!firstChild.content) {
+      inline.children.shift();
+    }
+
+    blockquote.attrJoin('class', 'markdown-callout');
+    blockquote.attrJoin('class', `markdown-callout-${type}`);
+    blockquote.attrSet('data-callout-title', CALLOUT_TYPES[type]);
+  }
+});
+
+md.renderer.rules.task_checkbox = (tokens, idx) => {
+  const checked = tokens[idx].meta?.checked === true;
+  const sourceLine = Number.isInteger(tokens[idx].meta?.sourceLine) ? ` data-line="${tokens[idx].meta.sourceLine}"` : '';
+  return `<input class="task-list-checkbox${checked ? ' checked' : ''}" type="checkbox"${checked ? ' checked' : ''}${sourceLine} aria-label="${checked ? 'Completed' : 'Not completed'}" title="Toggle task" contenteditable="false" />`;
+};
+
+function renderMathWithKatex(value, displayMode = false) {
+  try {
+    return katex.renderToString(String(value || ''), {
+      displayMode,
+      throwOnError: false,
+      trust: false,
+      strict: 'warn',
+      output: 'htmlAndMathml'
+    });
+  } catch {
+    return md.utils.escapeHtml(value);
+  }
+}
+
+md.renderer.rules.math_inline = (tokens, idx) => `<span class="math-inline">${renderMathWithKatex(tokens[idx].content, false)}</span>`;
+
+md.renderer.rules.math_block = (tokens, idx) => `<div class="math-block">${renderMathWithKatex(tokens[idx].content, true)}</div>\n`;
+
 md.renderer.rules.paragraph_open = (tokens, idx, options, env, self) => {
   tokens[idx].attrJoin('class', 'splendor-p');
   if (Array.isArray(tokens[idx].map)) {
@@ -584,6 +809,7 @@ const settingsEmbeddedMenu = document.getElementById('settings-embedded-menu');
 const settingsEditorFont = document.getElementById('settings-editor-font');
 const settingsWordWrap = document.getElementById('settings-word-wrap');
 const settingsLineNumbers = document.getElementById('settings-line-numbers');
+const settingsContinuePrefixes = document.getElementById('settings-continue-prefixes');
 const settingsSpellcheck = document.getElementById('settings-spellcheck');
 const settingsDictionary = document.getElementById('settings-dictionary');
 const settingsMermaidPreview = document.getElementById('settings-mermaid-preview');
@@ -595,6 +821,7 @@ const statusLineCount = document.getElementById('status-line-count');
 const statusWordCount = document.getElementById('status-word-count');
 const statusCharCount = document.getElementById('status-char-count');
 const statusImageCount = document.getElementById('status-image-count');
+const boundPreviewDocuments = new WeakSet();
 
 const paneLayout = createPaneLayoutController({
   body,
@@ -665,6 +892,7 @@ let themeDebugVisible = false;
 let syncViewsEnabled = true;
 let wordWrapEnabled = false;
 let lineNumbersEnabled = false;
+let continuePrefixesEnabled = true;
 let mermaidPreviewEnabled = false;
 let outlineVisible = true;
 let outlinePosition = 'right';
@@ -777,6 +1005,7 @@ const KEYBINDING_LABELS = {
 const menuTriggers = [...document.querySelectorAll('.menu-trigger')];
 const menuGroups = [...document.querySelectorAll('.menu-group')];
 const actionButtons = [...document.querySelectorAll('[data-action]')];
+const calloutMenu = document.getElementById('callout-menu');
 
 function escapeRegex(value) {
   return String(value || '').replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
@@ -1096,6 +1325,7 @@ function renderSettingsControls() {
   if (settingsEditorFont) settingsEditorFont.value = editorFont;
   if (settingsWordWrap) settingsWordWrap.checked = wordWrapEnabled;
   if (settingsLineNumbers) settingsLineNumbers.checked = lineNumbersEnabled;
+  if (settingsContinuePrefixes) settingsContinuePrefixes.checked = continuePrefixesEnabled;
   if (settingsSpellcheck) settingsSpellcheck.checked = spellcheckEnabled;
   if (settingsDictionary) {
     settingsDictionary.value = dictionaryLanguage;
@@ -1739,6 +1969,7 @@ function updateMenuChecks() {
   const syncViewsToggle = document.querySelector('[data-toggle="sync-views"]');
   const wordWrapToggle = document.querySelector('[data-toggle="word-wrap"]');
   const lineNumbersToggle = document.querySelector('[data-toggle="line-numbers"]');
+  const continuePrefixesToggle = document.querySelector('[data-toggle="continue-prefixes"]');
   const mermaidPreviewToggle = document.querySelector('[data-toggle="mermaid-preview"]');
   const outlineToggle = document.querySelector('[data-toggle="outline-view"]');
   const outlineLeftToggle = document.querySelector('[data-toggle="outline-left"]');
@@ -1782,6 +2013,7 @@ function updateMenuChecks() {
   if (syncViewsToggle) syncViewsToggle.classList.toggle('checked', syncViewsEnabled);
   if (wordWrapToggle) wordWrapToggle.classList.toggle('checked', wordWrapEnabled);
   if (lineNumbersToggle) lineNumbersToggle.classList.toggle('checked', lineNumbersEnabled);
+  if (continuePrefixesToggle) continuePrefixesToggle.classList.toggle('checked', continuePrefixesEnabled);
   if (mermaidPreviewToggle) mermaidPreviewToggle.classList.toggle('checked', mermaidPreviewEnabled);
   if (outlineToggle) outlineToggle.classList.toggle('checked', outlineVisible);
   if (outlineLeftToggle) outlineLeftToggle.classList.toggle('checked', outlinePosition === 'left');
@@ -1828,6 +2060,7 @@ function notifyNativeMenuState() {
     syncViewsEnabled,
     wordWrapEnabled,
     lineNumbersEnabled,
+    continuePrefixesEnabled,
     mermaidPreviewEnabled,
     outlineVisible,
     outlinePosition,
@@ -1851,6 +2084,28 @@ function updateListModeButtons() {
   const numberButton = document.querySelector('.ribbon-button[data-action="format-list-number"]');
   if (bulletButton) bulletButton.classList.toggle('active', listContinuationMode === 'bullet');
   if (numberButton) numberButton.classList.toggle('active', listContinuationMode === 'number');
+}
+
+function closeCalloutMenu() {
+  calloutMenu?.classList.add('hidden');
+}
+
+function toggleCalloutMenu(anchor) {
+  if (!calloutMenu || !anchor) return;
+  if (!calloutMenu.classList.contains('hidden')) {
+    closeCalloutMenu();
+    return;
+  }
+
+  closeAllMenus();
+  const rect = anchor.getBoundingClientRect();
+  calloutMenu.classList.remove('hidden');
+  const menuRect = calloutMenu.getBoundingClientRect();
+  const left = Math.min(Math.max(8, rect.left), Math.max(8, window.innerWidth - menuRect.width - 8));
+  const top = Math.min(rect.bottom + 6, Math.max(8, window.innerHeight - menuRect.height - 8));
+  calloutMenu.style.left = `${left}px`;
+  calloutMenu.style.top = `${top}px`;
+  calloutMenu.querySelector('button')?.focus({ preventScroll: true });
 }
 
 function setListContinuationMode(nextMode) {
@@ -2151,9 +2406,15 @@ async function loadWordWrapPreference() {
   return result.enabled === true;
 }
 
+async function loadContinuePrefixesPreference() {
+  const result = await window.nativeApi.loadContinuePrefixesPreference();
+  if (!result?.loaded) return result?.enabled !== false;
+  return result.enabled === true;
+}
+
 async function loadMermaidPreviewPreference() {
   const result = await window.nativeApi.loadMermaidPreviewPreference();
-  if (!result?.loaded) return false;
+  if (!result?.loaded) return result?.enabled !== false;
   return result.enabled === true;
 }
 
@@ -2240,6 +2501,16 @@ async function loadLineNumbersPreference() {
   return result.enabled === true;
 }
 
+function setContinuePrefixesEnabled(enabled, options = {}) {
+  const persist = options.persist !== false;
+  continuePrefixesEnabled = enabled !== false;
+  if (persist) {
+    void window.nativeApi.saveContinuePrefixesPreference({ enabled: continuePrefixesEnabled });
+  }
+  updateMenuChecks();
+  notifyNativeMenuState();
+}
+
 function setMindmapVisible(enabled, options = {}) {
   const persist = options.persist !== false;
   setViewVisibility(showRaw, showFormatted, enabled === true);
@@ -2316,9 +2587,166 @@ function ensurePreviewChromeCss(doc) {
     head.appendChild(previewChromeCss);
   }
   previewChromeCss.textContent = `
+    ${katexCssText}
     body {
       box-sizing: border-box !important;
-      padding: 28px 28px 32px 28px !important;
+      padding: 14px 28px 32px 28px !important;
+    }
+    body > :first-child {
+      margin-top: 0 !important;
+    }
+    .task-list-item {
+      list-style: none;
+      margin-left: -1.35em;
+    }
+    .task-list-checkbox {
+      appearance: none;
+      -webkit-appearance: none;
+      display: inline-block;
+      position: relative;
+      box-sizing: border-box;
+      width: 1.05em;
+      height: 1.05em;
+      padding: 0;
+      margin-top: 0;
+      margin-bottom: 0;
+      margin-left: 0;
+      margin-right: 0.48em;
+      border: 1.5px solid #8d96a8;
+      border-radius: 4px;
+      color: #ffffff;
+      background: transparent;
+      font-size: 0.82em;
+      font-weight: 800;
+      line-height: 1;
+      vertical-align: -0.12em;
+      cursor: pointer;
+    }
+    .task-list-checkbox.checked,
+    .task-list-checkbox:checked {
+      border-color: #0a84ff;
+      background: #0a84ff;
+    }
+    .task-list-checkbox.checked::after,
+    .task-list-checkbox:checked::after {
+      content: "✓";
+      position: absolute;
+      left: 50%;
+      top: 50%;
+      transform: translate(-50%, -54%);
+      color: #ffffff;
+    }
+    .task-list-checkbox:focus-visible {
+      outline: 2px solid #0a84ff;
+      outline-offset: 2px;
+    }
+    body.theme-dark .task-list-checkbox {
+      border-color: #aeb6c7;
+    }
+    body.theme-dark .task-list-checkbox.checked,
+    body.theme-dark .task-list-checkbox:checked {
+      border-color: #76b7ff;
+      background: #76b7ff;
+      color: #111827;
+    }
+    body.theme-dark .task-list-checkbox.checked::after,
+    body.theme-dark .task-list-checkbox:checked::after {
+      color: #111827;
+    }
+    .markdown-callout {
+      margin: 1em 0;
+      padding: 0.82em 1em 0.82em 1.05em;
+      border-left: 4px solid var(--callout-accent, #8d96a8);
+      border-radius: 7px;
+      color: inherit;
+      background: color-mix(in srgb, var(--callout-accent, #8d96a8) 10%, transparent);
+    }
+    .markdown-callout::before {
+      content: attr(data-callout-title);
+      display: block;
+      margin-bottom: 0.35em;
+      color: var(--callout-accent, #59636e);
+      font-size: 0.78em;
+      font-weight: 800;
+      letter-spacing: 0.04em;
+      text-transform: uppercase;
+    }
+    .markdown-callout > :first-child {
+      margin-top: 0;
+    }
+    .markdown-callout > :last-child {
+      margin-bottom: 0;
+    }
+    .markdown-callout-note { --callout-accent: #0a84ff; }
+    .markdown-callout-tip { --callout-accent: #16a34a; }
+    .markdown-callout-important { --callout-accent: #7c3aed; }
+    .markdown-callout-warning { --callout-accent: #d97706; }
+    .markdown-callout-caution { --callout-accent: #dc2626; }
+    body.theme-dark .markdown-callout-note { --callout-accent: #76b7ff; }
+    body.theme-dark .markdown-callout-tip { --callout-accent: #7ddf9a; }
+    body.theme-dark .markdown-callout-important { --callout-accent: #c7a6ff; }
+    body.theme-dark .markdown-callout-warning { --callout-accent: #ffc06e; }
+    body.theme-dark .markdown-callout-caution { --callout-accent: #ff8f8f; }
+    dl {
+      margin: 1em 0;
+    }
+    dt {
+      margin-top: 0.75em;
+      font-weight: 800;
+      color: inherit;
+    }
+    dd {
+      margin: 0.2em 0 0.65em 1.35em;
+      color: inherit;
+    }
+    dd > :first-child {
+      margin-top: 0;
+    }
+    dd > :last-child {
+      margin-bottom: 0;
+    }
+    .math-inline {
+      white-space: nowrap;
+    }
+    .math-block {
+      display: block;
+      margin: 1em 0;
+      padding: 0.85em 1em;
+      overflow-x: auto;
+      border-radius: 7px;
+      background: rgba(127, 127, 145, 0.1);
+      text-align: center;
+    }
+    .footnote-ref {
+      font-size: 0.78em;
+      line-height: 0;
+    }
+    .footnote-ref a,
+    .footnote-backref {
+      text-decoration: none;
+    }
+    .footnotes-sep {
+      margin: 2em 0 0.9em;
+      border: 0;
+      border-top: 1px solid rgba(127, 127, 145, 0.35);
+    }
+    .footnotes {
+      color: inherit;
+      font-size: 0.9em;
+    }
+    .footnotes-list {
+      padding-left: 1.35em;
+    }
+    .footnote-item:target {
+      background: rgba(10, 132, 255, 0.12);
+    }
+    img {
+      display: block;
+      max-width: 100%;
+      max-height: 360px;
+      width: auto;
+      height: auto;
+      object-fit: contain;
     }
     .preview-empty-state {
       min-height: calc(100vh - 60px);
@@ -2438,9 +2866,166 @@ function ensureFrameDocument() {
     </style>
     <style id="user-css"></style>
     <style id="preview-chrome-css">
+      ${katexCssText}
       body {
         box-sizing: border-box !important;
-        padding: 28px 28px 32px 28px !important;
+        padding: 14px 28px 32px 28px !important;
+      }
+      body > :first-child {
+        margin-top: 0 !important;
+      }
+      .task-list-item {
+        list-style: none;
+        margin-left: -1.35em;
+      }
+      .task-list-checkbox {
+        appearance: none;
+        -webkit-appearance: none;
+        display: inline-block;
+        position: relative;
+        box-sizing: border-box;
+        width: 1.05em;
+        height: 1.05em;
+        padding: 0;
+        margin-top: 0;
+        margin-bottom: 0;
+        margin-left: 0;
+        margin-right: 0.48em;
+        border: 1.5px solid #8d96a8;
+        border-radius: 4px;
+        color: #ffffff;
+        background: transparent;
+        font-size: 0.82em;
+        font-weight: 800;
+        line-height: 1;
+        vertical-align: -0.12em;
+        cursor: pointer;
+      }
+      .task-list-checkbox.checked,
+      .task-list-checkbox:checked {
+        border-color: #0a84ff;
+        background: #0a84ff;
+      }
+      .task-list-checkbox.checked::after,
+      .task-list-checkbox:checked::after {
+        content: "✓";
+        position: absolute;
+        left: 50%;
+        top: 50%;
+        transform: translate(-50%, -54%);
+        color: #ffffff;
+      }
+      .task-list-checkbox:focus-visible {
+        outline: 2px solid #0a84ff;
+        outline-offset: 2px;
+      }
+      body.theme-dark .task-list-checkbox {
+        border-color: #aeb6c7;
+      }
+      body.theme-dark .task-list-checkbox.checked,
+      body.theme-dark .task-list-checkbox:checked {
+        border-color: #76b7ff;
+        background: #76b7ff;
+        color: #111827;
+      }
+      body.theme-dark .task-list-checkbox.checked::after,
+      body.theme-dark .task-list-checkbox:checked::after {
+        color: #111827;
+      }
+      .markdown-callout {
+        margin: 1em 0;
+        padding: 0.82em 1em 0.82em 1.05em;
+        border-left: 4px solid var(--callout-accent, #8d96a8);
+        border-radius: 7px;
+        color: inherit;
+        background: color-mix(in srgb, var(--callout-accent, #8d96a8) 10%, transparent);
+      }
+      .markdown-callout::before {
+        content: attr(data-callout-title);
+        display: block;
+        margin-bottom: 0.35em;
+        color: var(--callout-accent, #59636e);
+        font-size: 0.78em;
+        font-weight: 800;
+        letter-spacing: 0.04em;
+        text-transform: uppercase;
+      }
+      .markdown-callout > :first-child {
+        margin-top: 0;
+      }
+      .markdown-callout > :last-child {
+        margin-bottom: 0;
+      }
+      .markdown-callout-note { --callout-accent: #0a84ff; }
+      .markdown-callout-tip { --callout-accent: #16a34a; }
+      .markdown-callout-important { --callout-accent: #7c3aed; }
+      .markdown-callout-warning { --callout-accent: #d97706; }
+      .markdown-callout-caution { --callout-accent: #dc2626; }
+      body.theme-dark .markdown-callout-note { --callout-accent: #76b7ff; }
+      body.theme-dark .markdown-callout-tip { --callout-accent: #7ddf9a; }
+      body.theme-dark .markdown-callout-important { --callout-accent: #c7a6ff; }
+      body.theme-dark .markdown-callout-warning { --callout-accent: #ffc06e; }
+      body.theme-dark .markdown-callout-caution { --callout-accent: #ff8f8f; }
+      dl {
+        margin: 1em 0;
+      }
+      dt {
+        margin-top: 0.75em;
+        font-weight: 800;
+        color: inherit;
+      }
+      dd {
+        margin: 0.2em 0 0.65em 1.35em;
+        color: inherit;
+      }
+      dd > :first-child {
+        margin-top: 0;
+      }
+      dd > :last-child {
+        margin-bottom: 0;
+      }
+      .math-inline {
+        white-space: nowrap;
+      }
+      .math-block {
+        display: block;
+        margin: 1em 0;
+        padding: 0.85em 1em;
+        overflow-x: auto;
+        border-radius: 7px;
+        background: rgba(127, 127, 145, 0.1);
+        text-align: center;
+      }
+      .footnote-ref {
+        font-size: 0.78em;
+        line-height: 0;
+      }
+      .footnote-ref a,
+      .footnote-backref {
+        text-decoration: none;
+      }
+      .footnotes-sep {
+        margin: 2em 0 0.9em;
+        border: 0;
+        border-top: 1px solid rgba(127, 127, 145, 0.35);
+      }
+      .footnotes {
+        color: inherit;
+        font-size: 0.9em;
+      }
+      .footnotes-list {
+        padding-left: 1.35em;
+      }
+      .footnote-item:target {
+        background: rgba(10, 132, 255, 0.12);
+      }
+      img {
+        display: block;
+        max-width: 100%;
+        max-height: 360px;
+        width: auto;
+        height: auto;
+        object-fit: contain;
       }
       .preview-empty-state {
         min-height: calc(100vh - 60px);
@@ -2540,9 +3125,137 @@ function buildExportThemeCss() {
       overflow-wrap: anywhere !important;
       word-break: break-word !important;
     }
+    .task-list-item {
+      list-style: none !important;
+      margin-left: -1.35em !important;
+    }
+    .task-list-checkbox {
+      appearance: none !important;
+      -webkit-appearance: none !important;
+      display: inline-block !important;
+      position: relative !important;
+      box-sizing: border-box !important;
+      width: 1.05em !important;
+      height: 1.05em !important;
+      padding: 0 !important;
+      margin-top: 0 !important;
+      margin-bottom: 0 !important;
+      margin-left: 0 !important;
+      margin-right: 0.48em !important;
+      border: 1.5px solid #8d96a8 !important;
+      border-radius: 4px !important;
+      color: #ffffff !important;
+      background: transparent !important;
+      font-size: 0.82em !important;
+      font-weight: 800 !important;
+      line-height: 1 !important;
+      vertical-align: -0.12em !important;
+      cursor: pointer !important;
+    }
+    .task-list-checkbox.checked,
+    .task-list-checkbox:checked {
+      border-color: #0a84ff !important;
+      background: #0a84ff !important;
+    }
+    .task-list-checkbox.checked::after,
+    .task-list-checkbox:checked::after {
+      content: "✓" !important;
+      position: absolute !important;
+      left: 50% !important;
+      top: 50% !important;
+      transform: translate(-50%, -54%) !important;
+      color: #ffffff !important;
+    }
+    .markdown-callout {
+      margin: 1em 0 !important;
+      padding: 0.82em 1em 0.82em 1.05em !important;
+      border-left: 4px solid var(--callout-accent, #8d96a8) !important;
+      border-radius: 7px !important;
+      color: inherit !important;
+      background: color-mix(in srgb, var(--callout-accent, #8d96a8) 10%, transparent) !important;
+    }
+    .markdown-callout::before {
+      content: attr(data-callout-title) !important;
+      display: block !important;
+      margin-bottom: 0.35em !important;
+      color: var(--callout-accent, #59636e) !important;
+      font-size: 0.78em !important;
+      font-weight: 800 !important;
+      letter-spacing: 0.04em !important;
+      text-transform: uppercase !important;
+    }
+    .markdown-callout > :first-child {
+      margin-top: 0 !important;
+    }
+    .markdown-callout > :last-child {
+      margin-bottom: 0 !important;
+    }
+    .markdown-callout-note { --callout-accent: #0a84ff; }
+    .markdown-callout-tip { --callout-accent: #16a34a; }
+    .markdown-callout-important { --callout-accent: #7c3aed; }
+    .markdown-callout-warning { --callout-accent: #d97706; }
+    .markdown-callout-caution { --callout-accent: #dc2626; }
+    dl {
+      margin: 1em 0 !important;
+    }
+    dt {
+      margin-top: 0.75em !important;
+      font-weight: 800 !important;
+      color: inherit !important;
+    }
+    dd {
+      margin: 0.2em 0 0.65em 1.35em !important;
+      color: inherit !important;
+    }
+    dd > :first-child {
+      margin-top: 0 !important;
+    }
+    dd > :last-child {
+      margin-bottom: 0 !important;
+    }
+    .math-inline {
+      white-space: nowrap !important;
+    }
+    .math-block {
+      display: block !important;
+      margin: 1em 0 !important;
+      padding: 0.85em 1em !important;
+      overflow-x: auto !important;
+      border-radius: 7px !important;
+      background: rgba(127, 127, 145, 0.1) !important;
+      text-align: center !important;
+    }
+    .footnote-ref {
+      font-size: 0.78em !important;
+      line-height: 0 !important;
+    }
+    .footnote-ref a,
+    .footnote-backref {
+      text-decoration: none !important;
+    }
+    .footnotes-sep {
+      margin: 2em 0 0.9em !important;
+      border: 0 !important;
+      border-top: 1px solid rgba(127, 127, 145, 0.35) !important;
+    }
+    .footnotes {
+      color: inherit !important;
+      font-size: 0.9em !important;
+    }
+    .footnotes-list {
+      padding-left: 1.35em !important;
+    }
+    img {
+      display: block !important;
+      max-width: 100% !important;
+      max-height: 320px !important;
+      width: auto !important;
+      height: auto !important;
+      object-fit: contain !important;
+    }
   `;
 
-  return normalizeThemeCss(`${baseThemeCss}\n${exportOverrides}`);
+  return normalizeThemeCss(`${katexCssText}\n${baseThemeCss}\n${exportOverrides}`);
 }
 
 function updateThemeDebug() {
@@ -2739,8 +3452,19 @@ function patchFrameHtml(html) {
       return true;
     }
   });
+  syncPreviewTaskCheckboxStates(doc);
   invalidatePreviewAnchorCache();
   updateThemeDebug();
+}
+
+function syncPreviewTaskCheckboxStates(doc = frame.contentDocument) {
+  if (!doc) return;
+  for (const checkbox of [...doc.querySelectorAll('.task-list-checkbox')]) {
+    const checked = checkbox.hasAttribute('checked') || checkbox.classList.contains('checked');
+    checkbox.checked = checked;
+    checkbox.defaultChecked = checked;
+    checkbox.classList.toggle('checked', checked);
+  }
 }
 
 async function renderMermaidBlocksInDocument(doc, options = {}) {
@@ -2850,6 +3574,57 @@ function scheduleFrameMermaidRender() {
   }, 0);
 }
 
+function mimeTypeForImagePath(filePath) {
+  const ext = path.extname(String(filePath || '')).toLowerCase();
+  if (ext === '.jpg' || ext === '.jpeg') return 'image/jpeg';
+  if (ext === '.png') return 'image/png';
+  if (ext === '.gif') return 'image/gif';
+  if (ext === '.webp') return 'image/webp';
+  if (ext === '.svg') return 'image/svg+xml';
+  if (ext === '.bmp') return 'image/bmp';
+  return 'application/octet-stream';
+}
+
+function localImagePathFromSrc(src) {
+  const raw = String(src || '').trim();
+  if (!raw || raw.startsWith('data:')) return null;
+  if (/^https?:\/\//i.test(raw)) return null;
+  if (/^file:/i.test(raw)) {
+    try {
+      return fileURLToPath(raw);
+    } catch {
+      return null;
+    }
+  }
+  if (/^[a-zA-Z][a-zA-Z0-9+.-]*:/.test(raw)) return null;
+
+  const withoutFragment = raw.split('#')[0].split('?')[0];
+  const decoded = decodeURIComponent(withoutFragment);
+  const baseDir = currentFilePath ? path.dirname(currentFilePath) : process.cwd();
+  return path.resolve(baseDir, decoded);
+}
+
+async function inlineLocalImagesForExport(doc) {
+  if (!doc) return;
+  const images = [...doc.querySelectorAll('img[src]')];
+  for (const image of images) {
+    const src = image.getAttribute('src');
+    const localPath = localImagePathFromSrc(src);
+    if (!localPath) continue;
+    try {
+      // eslint-disable-next-line no-await-in-loop
+      const bytes = await fs.readFile(localPath);
+      image.setAttribute('src', `data:${mimeTypeForImagePath(localPath)};base64,${bytes.toString('base64')}`);
+    } catch (error) {
+      diagnosticLog('export.image.inline.failed', {
+        src,
+        path: localPath,
+        error: String(error?.message || error || 'Unable to inline image')
+      });
+    }
+  }
+}
+
 async function renderMarkdownForExport(markdown) {
   const split = splitFrontMatter(markdown);
   let html = '';
@@ -2859,11 +3634,12 @@ async function renderMarkdownForExport(markdown) {
   } finally {
     renderingForExport = false;
   }
-  if (!MERMAID_ENABLED) return html;
-  if (!html.includes('data-mermaid-block')) return html;
   const exportDoc = document.implementation.createHTMLDocument('export');
   exportDoc.body.innerHTML = html;
-  await renderMermaidBlocksInDocument(exportDoc, { forExport: true });
+  await inlineLocalImagesForExport(exportDoc);
+  if (MERMAID_ENABLED && html.includes('data-mermaid-block')) {
+    await renderMermaidBlocksInDocument(exportDoc, { forExport: true });
+  }
   return exportDoc.body.innerHTML;
 }
 
@@ -3311,6 +4087,32 @@ function adjustCurrentLineIndent(increase) {
   });
 }
 
+function formatCallout(type) {
+  const normalized = String(type || '').toLowerCase();
+  const title = CALLOUT_TYPES[normalized];
+  if (!title) return;
+
+  replaceSelectionInRaw(({ text, start, end, selected }) => {
+    const body = selected && selected.trim().length > 0
+      ? selected.replace(/\s+$/g, '')
+      : `${title} text`;
+    const quotedBody = body
+      .split(/\r?\n/)
+      .map((line) => `> ${line}`)
+      .join('\n');
+    const before = start > 0 && text[start - 1] !== '\n' ? '\n' : '';
+    const after = end < text.length && text[end] !== '\n' ? '\n' : '';
+    const replacement = `${before}> [!${normalized.toUpperCase()}]\n${quotedBody}${after}`;
+    const nextText = `${text.slice(0, start)}${replacement}${text.slice(end)}`;
+    const bodyStart = start + before.length + `> [!${normalized.toUpperCase()}]\n> `.length;
+    return {
+      text: nextText,
+      selectionStart: bodyStart,
+      selectionEnd: bodyStart + body.length
+    };
+  });
+}
+
 function applyFormatAction(action) {
   if (lastFocusedEditor === 'formatted' && frame.contentDocument) {
     const doc = frame.contentDocument;
@@ -3410,6 +4212,9 @@ function applyFormatAction(action) {
     case 'format-quote':
       prefixSelectedLines(() => '> ');
       break;
+    case 'format-callout':
+      formatCallout('note');
+      break;
     default:
       break;
   }
@@ -3467,6 +4272,65 @@ function handleRawListContinuationKeydown(event) {
   });
 }
 
+function deriveMarkdownContinuationPrefix(lineToCaret) {
+  const quoteMatch = String(lineToCaret || '').match(/^(\s*(?:>\s*)+)(.*)$/);
+  const quotePrefix = quoteMatch ? quoteMatch[1] : '';
+  const editablePart = quoteMatch ? quoteMatch[2] : String(lineToCaret || '');
+
+  const taskMatch = editablePart.match(/^(\s*)([-*+]|\d+[.)])\s+\[([ xX])]\s+(.*)$/);
+  if (taskMatch) {
+    if (taskMatch[4].trim().length === 0) return null;
+    const marker = /^\d/.test(taskMatch[2])
+      ? `${Number.parseInt(taskMatch[2], 10) + 1}${taskMatch[2].endsWith(')') ? ')' : '.'}`
+      : taskMatch[2];
+    return `${quotePrefix}${taskMatch[1]}${marker} [ ] `;
+  }
+
+  const bulletMatch = editablePart.match(/^(\s*)([-*+])\s+(.*)$/);
+  if (bulletMatch) {
+    if (bulletMatch[3].trim().length === 0) return null;
+    return `${quotePrefix}${bulletMatch[1]}${bulletMatch[2]} `;
+  }
+
+  const orderedMatch = editablePart.match(/^(\s*)(\d+)([.)])\s+(.*)$/);
+  if (orderedMatch) {
+    if (orderedMatch[4].trim().length === 0) return null;
+    return `${quotePrefix}${orderedMatch[1]}${Number(orderedMatch[2]) + 1}${orderedMatch[3]} `;
+  }
+
+  if (quotePrefix && editablePart.trim().length > 0) {
+    return quotePrefix.endsWith(' ') ? quotePrefix : `${quotePrefix} `;
+  }
+
+  return null;
+}
+
+function handleRawMarkdownContinuationKeydown(event) {
+  if (!continuePrefixesEnabled) return false;
+  if (event.key !== 'Enter') return false;
+  if (event.metaKey || event.ctrlKey || event.altKey || event.shiftKey) return false;
+
+  const start = rawEditor.selectionStart ?? 0;
+  const text = rawEditor.value;
+  const lineStart = text.lastIndexOf('\n', Math.max(0, start - 1)) + 1;
+  const lineToCaret = text.slice(lineStart, start);
+  const continuation = deriveMarkdownContinuationPrefix(lineToCaret);
+  if (continuation === null) return false;
+
+  event.preventDefault();
+  rawUndoStack.push(lastRawSnapshot);
+  if (rawUndoStack.length > 500) rawUndoStack.shift();
+  rawRedoStack.length = 0;
+
+  replaceSelectionInRaw(({ text: currentText, start: selStart, end: selEnd }) => {
+    const replacement = `\n${continuation}`;
+    const nextText = `${currentText.slice(0, selStart)}${replacement}${currentText.slice(selEnd)}`;
+    const caret = selStart + replacement.length;
+    return { text: nextText, selectionStart: caret, selectionEnd: caret };
+  });
+  return true;
+}
+
 function handleRawEditorKeydown(event) {
   if (event.key === 'Tab' && !event.metaKey && !event.ctrlKey && !event.altKey) {
     event.preventDefault();
@@ -3474,6 +4338,7 @@ function handleRawEditorKeydown(event) {
     return;
   }
 
+  if (handleRawMarkdownContinuationKeydown(event)) return;
   handleRawListContinuationKeydown(event);
 }
 
@@ -3525,14 +4390,17 @@ function runEditCommand(action) {
   }
 }
 
-function setMarkdownProgrammatically(nextMarkdown, selectionStart = null, selectionEnd = null) {
+function setMarkdownProgrammatically(nextMarkdown, selectionStart = null, selectionEnd = null, options = {}) {
+  const focusRaw = options.focusRaw !== false;
   suppressRawHandler = true;
   rawEditor.value = nextMarkdown;
   updateLineNumbers({ force: true });
   if (typeof selectionStart === 'number' && typeof selectionEnd === 'number') {
     rawEditor.setSelectionRange(selectionStart, selectionEnd);
   }
-  rawEditor.focus({ preventScroll: true });
+  if (focusRaw) {
+    rawEditor.focus({ preventScroll: true });
+  }
   suppressRawHandler = false;
 
   renderFromMarkdown(nextMarkdown);
@@ -3541,6 +4409,57 @@ function setMarkdownProgrammatically(nextMarkdown, selectionStart = null, select
   syncRawSnapshot();
   updateDirtyFromState();
   publishSessionState();
+}
+
+function toggleTaskAtSourceLine(lineNumber) {
+  const sourceLine = Number(lineNumber);
+  if (!Number.isInteger(sourceLine) || sourceLine < 0) return false;
+
+  const lines = markdownState.split('\n');
+  if (sourceLine >= lines.length) return false;
+
+  const match = lines[sourceLine].match(/^(\s*(?:[-*+]|\d+[.)])\s+)\[([ xX])](\s+)/);
+  if (!match) return false;
+
+  const nextMarker = match[2].toLowerCase() === 'x' ? ' ' : 'x';
+  lines[sourceLine] = `${match[1]}[${nextMarker}]${match[3]}${lines[sourceLine].slice(match[0].length)}`;
+  const nextMarkdown = lines.join('\n');
+  const selectionStart = rawEditor.selectionStart ?? 0;
+  const selectionEnd = rawEditor.selectionEnd ?? selectionStart;
+
+  rawUndoStack.push(captureRawSnapshot());
+  if (rawUndoStack.length > 500) rawUndoStack.shift();
+  rawRedoStack.length = 0;
+  setMarkdownProgrammatically(nextMarkdown, selectionStart, selectionEnd, { focusRaw: false });
+  return true;
+}
+
+function toggleTaskAtOrdinal(taskIndex) {
+  const targetIndex = Number(taskIndex);
+  if (!Number.isInteger(targetIndex) || targetIndex < 0) return false;
+
+  const lines = markdownState.split('\n');
+  let currentIndex = -1;
+  for (let lineIndex = 0; lineIndex < lines.length; lineIndex += 1) {
+    if (!/^(\s*(?:[-*+]|\d+[.)])\s+)\[([ xX])](\s+)/.test(lines[lineIndex])) continue;
+    currentIndex += 1;
+    if (currentIndex === targetIndex) {
+      return toggleTaskAtSourceLine(lineIndex);
+    }
+  }
+  return false;
+}
+
+function togglePreviewTaskCheckbox(target) {
+  const checkbox = target?.closest?.('.task-list-checkbox');
+  if (!checkbox) return false;
+  const item = checkbox.closest('.task-list-item[data-line]');
+  const line = item?.dataset.line ?? checkbox.dataset.line;
+  if (toggleTaskAtSourceLine(Number(line))) return true;
+
+  const doc = checkbox.ownerDocument;
+  const taskCheckboxes = doc ? [...doc.querySelectorAll('.task-list-checkbox')] : [];
+  return toggleTaskAtOrdinal(taskCheckboxes.indexOf(checkbox));
 }
 
 function sanitizeFileStem(value) {
@@ -4250,6 +5169,7 @@ function closeAllMenus() {
   for (const group of menuGroups) {
     group.classList.remove('open');
   }
+  closeCalloutMenu();
 }
 
 async function confirmUnsavedChanges(context) {
@@ -4389,6 +5309,9 @@ async function handleAction(action, payload = {}) {
     case 'open-command-palette':
       openCommandPalette();
       break;
+    case 'show-callout-menu':
+      toggleCalloutMenu(payload?.trigger);
+      return;
     case 'format-bold':
     case 'format-italic':
     case 'format-inline-code':
@@ -4405,6 +5328,9 @@ async function handleAction(action, payload = {}) {
     case 'format-quote':
     case 'format-link':
       applyFormatAction(action);
+      break;
+    case 'format-callout':
+      formatCallout(payload?.callout || 'note');
       break;
 
     case 'mode-raw':
@@ -4583,6 +5509,12 @@ async function handleAction(action, payload = {}) {
     case 'set-line-numbers':
       setLineNumbersEnabled(Boolean(payload.enabled));
       break;
+    case 'toggle-continue-prefixes':
+      setContinuePrefixesEnabled(!continuePrefixesEnabled);
+      break;
+    case 'set-continue-prefixes':
+      setContinuePrefixesEnabled(Boolean(payload.enabled));
+      break;
     case 'toggle-mermaid-preview':
       setMermaidPreviewEnabled(!mermaidPreviewEnabled);
       break;
@@ -4663,7 +5595,13 @@ function wireMenus() {
 
   document.addEventListener('click', (event) => {
     const target = event.target;
-    if (!target.closest('.menu-group')) closeAllMenus();
+    if (!target.closest('.menu-group') && !target.closest('#callout-menu') && !target.closest('[data-action="show-callout-menu"]')) {
+      closeAllMenus();
+    }
+  });
+
+  document.addEventListener('keydown', (event) => {
+    if (event.key === 'Escape') closeAllMenus();
   });
 
   for (const button of actionButtons) {
@@ -4674,6 +5612,8 @@ function wireMenus() {
         if (button.dataset.preset) payload.preset = button.dataset.preset;
         if (button.dataset.mode) payload.mode = button.dataset.mode;
         if (button.dataset.layout) payload.layout = button.dataset.layout;
+        if (button.dataset.callout) payload.callout = button.dataset.callout;
+        payload.trigger = button;
         void handleAction(action, payload);
       }
     });
@@ -4816,6 +5756,66 @@ function wireKeyboardShortcuts() {
   });
 }
 
+function bindPreviewDocumentEvents(doc) {
+  if (!doc || boundPreviewDocuments.has(doc)) return;
+  boundPreviewDocuments.add(doc);
+
+  doc.body.addEventListener('focus', () => {
+    lastFocusedEditor = 'formatted';
+  });
+  doc.body.addEventListener('keydown', (event) => {
+    if ((event.key === ' ' || event.key === 'Enter') && togglePreviewTaskCheckbox(event.target)) {
+      event.preventDefault();
+      event.stopPropagation();
+      return;
+    }
+    if (!showFormatted) return;
+    applyHeadingShortcutInFormatted(event);
+  });
+  const handlePreviewTaskToggleEvent = (event) => {
+    if (!togglePreviewTaskCheckbox(event.target)) return;
+    event.preventDefault();
+    event.stopPropagation();
+  };
+  doc.addEventListener('click', (event) => {
+    handlePreviewTaskToggleEvent(event);
+  }, true);
+  doc.addEventListener('change', (event) => {
+    handlePreviewTaskToggleEvent(event);
+  }, true);
+  doc.addEventListener('input', (event) => {
+    if (!event.target?.closest?.('.task-list-checkbox')) return;
+    event.preventDefault();
+    event.stopPropagation();
+  }, true);
+  doc.body.addEventListener('input', (event) => {
+    if (event.target?.closest?.('.task-list-checkbox')) return;
+    if (!showFormatted) return;
+    handleFormattedEdit();
+  });
+  doc.addEventListener('selectionchange', () => {
+    if (lastFocusedEditor !== 'formatted') return;
+    syncRawToPreviewCursor();
+    publishSessionState();
+  });
+  const onPreviewScroll = () => {
+    if (activeScrollSyncSource === 'raw') {
+      publishSessionState();
+      return;
+    }
+    scheduleRawScrollSync();
+    publishSessionState();
+  };
+  doc.addEventListener('scroll', onPreviewScroll, true);
+  const scrollEl = doc.scrollingElement || doc.documentElement || doc.body;
+  if (scrollEl) {
+    scrollEl.addEventListener('scroll', onPreviewScroll, { passive: true });
+  }
+  if (frame.contentWindow) {
+    frame.contentWindow.addEventListener('scroll', onPreviewScroll, { passive: true });
+  }
+}
+
 function wireEvents() {
   window.addEventListener('resize', () => {
     invalidatePreviewAnchorCache();
@@ -4901,41 +5901,11 @@ function wireEvents() {
     applySpellcheckSetting();
 
     const doc = frame.contentDocument;
-    doc.body.addEventListener('focus', () => {
-      lastFocusedEditor = 'formatted';
-    });
-    doc.body.addEventListener('keydown', (event) => {
-      if (!showFormatted) return;
-      applyHeadingShortcutInFormatted(event);
-    });
-    doc.body.addEventListener('input', () => {
-      if (!showFormatted) return;
-      handleFormattedEdit();
-    });
-    doc.addEventListener('selectionchange', () => {
-      if (lastFocusedEditor !== 'formatted') return;
-      syncRawToPreviewCursor();
-      publishSessionState();
-    });
-    const onPreviewScroll = () => {
-      if (activeScrollSyncSource === 'raw') {
-        publishSessionState();
-        return;
-      }
-      scheduleRawScrollSync();
-      publishSessionState();
-    };
-    doc.addEventListener('scroll', onPreviewScroll, true);
-    const scrollEl = doc.scrollingElement || doc.documentElement || doc.body;
-    if (scrollEl) {
-      scrollEl.addEventListener('scroll', onPreviewScroll, { passive: true });
-    }
-    if (frame.contentWindow) {
-      frame.contentWindow.addEventListener('scroll', onPreviewScroll, { passive: true });
-    }
+    bindPreviewDocumentEvents(doc);
     schedulePreviewScrollSync();
     updateThemeDebug();
   });
+  bindPreviewDocumentEvents(frame.contentDocument);
 
   window.nativeApi.onMenuAction(({ action, payload }) => {
     void handleAction(action, payload);
@@ -5014,6 +5984,9 @@ function wireEvents() {
   }
   if (settingsLineNumbers) {
     settingsLineNumbers.addEventListener('change', () => setLineNumbersEnabled(settingsLineNumbers.checked));
+  }
+  if (settingsContinuePrefixes) {
+    settingsContinuePrefixes.addEventListener('change', () => setContinuePrefixesEnabled(settingsContinuePrefixes.checked));
   }
   if (settingsSpellcheck) {
     settingsSpellcheck.addEventListener('change', () => {
@@ -5145,6 +6118,10 @@ function bootstrap() {
     const savedLineNumbers = await loadLineNumbersPreference();
     setLineNumbersEnabled(savedLineNumbers, { persist: false });
     diagnosticLog('renderer.startup.line-numbers.loaded', { enabled: savedLineNumbers });
+
+    const savedContinuePrefixes = await loadContinuePrefixesPreference();
+    setContinuePrefixesEnabled(savedContinuePrefixes, { persist: false });
+    diagnosticLog('renderer.startup.continue-prefixes.loaded', { enabled: savedContinuePrefixes });
 
     const savedMindmap = await loadMindmapPreference();
     setMindmapLayout(savedMindmap.layout, { persist: false });

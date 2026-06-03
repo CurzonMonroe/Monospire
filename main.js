@@ -967,6 +967,13 @@ function buildAppMenu() {
           checked: false,
           click: (item) => sendMenuAction('set-line-numbers', { enabled: item.checked })
         },
+        {
+          id: 'continue-prefixes',
+          label: 'Continue Lists and Quotes',
+          type: 'checkbox',
+          checked: true,
+          click: (item) => sendMenuAction('set-continue-prefixes', { enabled: item.checked })
+        },
         { type: 'separator' },
         {
           id: 'toggle-outline',
@@ -1193,7 +1200,7 @@ async function exportMarkdownPdf(filePath, payload) {
       }
       pre { background: #f3f3f7; border-radius: 8px; padding: 12px; overflow-x: auto; }
       code { font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace; }
-      img, video, iframe { max-width: 100%; height: auto; }
+      img, video, iframe { max-width: 100%; max-height: 320px; width: auto; height: auto; object-fit: contain; }
       ${themeCss}
       ${presetCss}
     </style>
@@ -1291,7 +1298,7 @@ async function exportMarkdownHtml(filePath, payload) {
       }
       pre { background: #f3f3f7; border-radius: 8px; padding: 12px; overflow-x: auto; }
       code { font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace; }
-      img, video, iframe { max-width: 100%; height: auto; }
+      img, video, iframe { max-width: 100%; max-height: 320px; width: auto; height: auto; object-fit: contain; }
       ${themeCss}
       ${presetCss}
     </style>
@@ -2131,6 +2138,21 @@ ipcMain.handle('load-line-numbers-preference', async () => {
   return { loaded: true, enabled: settings.lineNumbers };
 });
 
+ipcMain.handle('save-continue-prefixes-preference', async (_event, payload) => {
+  const settings = await readSettings();
+  settings.continuePrefixes = payload?.enabled === true;
+  await writeSettings(settings);
+  return { saved: true };
+});
+
+ipcMain.handle('load-continue-prefixes-preference', async () => {
+  const settings = await readSettings();
+  if (typeof settings.continuePrefixes !== 'boolean') {
+    return { loaded: false, enabled: true };
+  }
+  return { loaded: true, enabled: settings.continuePrefixes };
+});
+
 ipcMain.handle('save-mermaid-preview-preference', async (_event, payload) => {
   const settings = await readSettings();
   settings.mermaidPreviewEnabled = payload?.enabled === true;
@@ -2141,7 +2163,7 @@ ipcMain.handle('save-mermaid-preview-preference', async (_event, payload) => {
 ipcMain.handle('load-mermaid-preview-preference', async () => {
   const settings = await readSettings();
   if (typeof settings.mermaidPreviewEnabled !== 'boolean') {
-    return { loaded: false, enabled: false };
+    return { loaded: false, enabled: true };
   }
   return { loaded: true, enabled: settings.mermaidPreviewEnabled };
 });
@@ -2774,6 +2796,7 @@ ipcMain.on('update-menu-state', (event, payload) => {
   const syncViewsItem = menu.getMenuItemById('sync-views');
   const wordWrapItem = menu.getMenuItemById('word-wrap');
   const lineNumbersItem = menu.getMenuItemById('line-numbers');
+  const continuePrefixesItem = menu.getMenuItemById('continue-prefixes');
   const mermaidPreviewItem = menu.getMenuItemById('mermaid-preview-experimental');
   const outlineItem = menu.getMenuItemById('toggle-outline');
   const outlineLeftItem = menu.getMenuItemById('outline-left');
@@ -2829,6 +2852,7 @@ ipcMain.on('update-menu-state', (event, payload) => {
   if (syncViewsItem && typeof payload.syncViewsEnabled === 'boolean') syncViewsItem.checked = payload.syncViewsEnabled;
   if (wordWrapItem && typeof payload.wordWrapEnabled === 'boolean') wordWrapItem.checked = payload.wordWrapEnabled;
   if (lineNumbersItem && typeof payload.lineNumbersEnabled === 'boolean') lineNumbersItem.checked = payload.lineNumbersEnabled;
+  if (continuePrefixesItem && typeof payload.continuePrefixesEnabled === 'boolean') continuePrefixesItem.checked = payload.continuePrefixesEnabled;
   if (mermaidPreviewItem && typeof payload.mermaidPreviewEnabled === 'boolean') mermaidPreviewItem.checked = payload.mermaidPreviewEnabled;
   if (outlineItem && typeof payload.outlineVisible === 'boolean') outlineItem.checked = payload.outlineVisible;
   if (outlineLeftItem && typeof payload.outlineVisible === 'boolean') outlineLeftItem.enabled = payload.outlineVisible;
