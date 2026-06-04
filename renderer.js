@@ -815,6 +815,8 @@ const rawPane = document.getElementById('raw-pane');
 const formattedPane = document.getElementById('formatted-pane');
 const rawEditor = document.getElementById('raw-editor');
 const rawEditorShell = document.getElementById('raw-editor-shell');
+const rawFoldGutter = document.getElementById('raw-fold-gutter');
+const rawFoldList = document.getElementById('raw-fold-list');
 const rawLineNumberList = document.getElementById('raw-line-number-list');
 const frame = document.getElementById('formatted-frame');
 const mindmapPane = document.getElementById('mindmap-pane');
@@ -832,6 +834,8 @@ const notesTreePane = document.getElementById('notes-tree-pane');
 const notesTreeRoot = document.getElementById('notes-tree-root');
 const notesTreeList = document.getElementById('notes-tree-list');
 const notesTreeResizer = document.getElementById('notes-tree-resizer');
+const notesTreeSortMenu = document.getElementById('notes-tree-sort-menu');
+const notesTreeContextMenu = document.getElementById('notes-tree-context-menu');
 const paneHeaderPositionClassNames = Array.from({ length: 10 }, (_item, index) => `pane-position-${index}`);
 const commandPalette = document.getElementById('command-palette');
 const paletteInput = document.getElementById('palette-input');
@@ -857,6 +861,7 @@ const settingsEditorFont = document.getElementById('settings-editor-font');
 const settingsWordWrap = document.getElementById('settings-word-wrap');
 const settingsLineNumbers = document.getElementById('settings-line-numbers');
 const settingsContinuePrefixes = document.getElementById('settings-continue-prefixes');
+const settingsCollapsibleText = document.getElementById('settings-collapsible-text');
 const settingsSpellcheck = document.getElementById('settings-spellcheck');
 const settingsDictionary = document.getElementById('settings-dictionary');
 const settingsMermaidPreview = document.getElementById('settings-mermaid-preview');
@@ -917,6 +922,7 @@ let themeDarkPath = null;
 let themeDarkCssText = '';
 let renderingForExport = false;
 let defaultTemplatePath = null;
+let templatesEnabled = false;
 let currentFilePath = null;
 let currentFileName = 'Untitled.md';
 let isDirty = false;
@@ -941,6 +947,7 @@ let themeDebugVisible = false;
 let syncViewsEnabled = true;
 let wordWrapEnabled = false;
 let lineNumbersEnabled = false;
+let collapsibleTextEnabled = false;
 let continuePrefixesEnabled = true;
 let mermaidPreviewEnabled = false;
 let outlineVisible = true;
@@ -951,14 +958,42 @@ let notesTreeRootPath = null;
 let notesTreeData = null;
 let notesTreeError = '';
 let notesTreeTruncated = false;
+let notesTreeItemLimit = 0;
 let notesTreeLoading = false;
 let notesTreeFolderEmojis = {};
 let notesTreeWidth = 270;
+let notesTreeZoom = 1;
+let notesTreeSort = {
+  folders: { field: 'name', direction: 'asc' },
+  files: { field: 'name', direction: 'asc' }
+};
+let notesTreeRainbowFolders = false;
 let activeFolderEmojiPath = '';
+let activeNotesTreeContextPath = '';
 const notesTreeExpandedPaths = new Set();
 const NOTES_TREE_MIN_WIDTH = 200;
 const NOTES_TREE_DEFAULT_WIDTH = 270;
 const NOTES_TREE_MAX_WIDTH = 520;
+const NOTES_TREE_MIN_ZOOM = 0.7;
+const NOTES_TREE_MAX_ZOOM = 2.2;
+const NOTES_TREE_SORT_FIELDS = new Set(['name', 'created', 'modified']);
+const NOTES_TREE_SORT_DIRECTIONS = new Set(['asc', 'desc']);
+const NOTES_TREE_SORT_FIELD_LABELS = {
+  name: 'Alphabetically',
+  created: 'Creation Date',
+  modified: 'Modified Date'
+};
+const NOTES_TREE_RAINBOW_COLORS = [
+  '#ff4d6d',
+  '#ff8c1a',
+  '#f6c945',
+  '#62d26f',
+  '#20c997',
+  '#22b8ff',
+  '#6c8cff',
+  '#b36bff',
+  '#ff66d8'
+];
 let lastFocusedEditor = 'raw';
 let isApplyingRawHistory = false;
 const rawUndoStack = [];
@@ -970,6 +1005,8 @@ let lastRawSnapshot = { text: markdownState, selectionStart: 0, selectionEnd: 0 
 let lastLineNumberCount = 0;
 let lastLineNumberSignature = '';
 let lastRawLineMetrics = null;
+let activeRawFolds = [];
+let rawFoldDisplayRows = [];
 let formattedNormalizeTimer = null;
 let lastFindQuery = '';
 let rawFindCursor = 0;
@@ -1298,6 +1335,114 @@ function rawScrollTopForLinePosition(line, progress = 0) {
 function updateLineNumberScroll() {
   if (!rawLineNumberList) return;
   rawLineNumberList.style.transform = `translateY(-${rawEditor.scrollTop || 0}px)`;
+  if (rawFoldList) {
+    rawFoldList.style.transform = `translateY(-${rawEditor.scrollTop || 0}px)`;
+  }
+}
+
+function discoverRawFoldRegions(source = markdownState) {
+  const lines = String(source || '').split('\n');
+  const regions = [];
+  if (lines[0] === '---') {
+    let end = -1;
+    for (let index = 1; index < lines.length; index += 1) {
+      if (lines[index] === '---') {
+        end = index;
+        break;
+      }
+    }
+    if (end > 0) {
+      regions.push({ key: 'metadata:0', type: 'metadata', start: 0, end, level: 0 });
+    }
+  }
+
+  for (let index = 0; index < lines.length; index += 1) {
+    const match = /^(#{1,6})\s+\S/.exec(lines[index] || '');
+    if (!match) continue;
+    const level = match[1].length;
+    let end = lines.length - 1;
+    for (let next = index + 1; next < lines.length; next += 1) {
+      const nextMatch = /^(#{1,6})\s+\S/.exec(lines[next] || '');
+      if (nextMatch && nextMatch[1].length <= level) {
+        end = next - 1;
+        break;
+      }
+    }
+    if (end > index) {
+      regions.push({ key: `heading:${index}`, type: 'heading', start: index, end, level });
+    }
+  }
+  return regions;
+}
+
+function foldedRegionForLine(lineIndex) {
+  return activeRawFolds.find((region) => region.start === lineIndex) || null;
+}
+
+function isLineInsideFold(lineIndex) {
+  return activeRawFolds.some((region) => lineIndex > region.start && lineIndex <= region.end);
+}
+
+function pruneRawFolds() {
+  const regions = discoverRawFoldRegions(markdownState);
+  activeRawFolds = activeRawFolds
+    .map((fold) => regions.find((region) => region.key === fold.key) || null)
+    .filter(Boolean);
+}
+
+function buildRawEditorDisplay() {
+  const source = String(markdownState || '');
+  const lines = source.split('\n');
+  rawFoldDisplayRows = [];
+  const output = [];
+  for (let index = 0; index < lines.length; index += 1) {
+    if (isLineInsideFold(index)) continue;
+    output.push(lines[index]);
+    rawFoldDisplayRows.push({ sourceLine: index, placeholder: false });
+    const fold = foldedRegionForLine(index);
+    if (fold) {
+      const hiddenCount = Math.max(1, fold.end - fold.start);
+      output.push(`⋯ ${hiddenCount} line${hiddenCount === 1 ? '' : 's'} folded`);
+      rawFoldDisplayRows.push({ sourceLine: index, placeholder: true, fold });
+    }
+  }
+  return output.join('\n');
+}
+
+function applyRawEditorDisplay(options = {}) {
+  const selectionStart = options.selectionStart ?? rawEditor.selectionStart;
+  const selectionEnd = options.selectionEnd ?? rawEditor.selectionEnd;
+  suppressRawHandler = true;
+  if (activeRawFolds.length === 0) {
+    rawFoldDisplayRows = [];
+  }
+  rawEditor.value = activeRawFolds.length > 0 ? buildRawEditorDisplay() : markdownState;
+  updateLineNumbers({ force: true });
+  if (activeRawFolds.length === 0 && typeof selectionStart === 'number' && typeof selectionEnd === 'number') {
+    rawEditor.setSelectionRange(Math.min(selectionStart, rawEditor.value.length), Math.min(selectionEnd, rawEditor.value.length));
+  }
+  suppressRawHandler = false;
+  syncRawSnapshot();
+}
+
+function expandAllRawFolds(options = {}) {
+  if (activeRawFolds.length === 0) return false;
+  activeRawFolds = [];
+  applyRawEditorDisplay(options);
+  return true;
+}
+
+function toggleRawFold(region) {
+  if (!collapsibleTextEnabled || !region) return;
+  const existingIndex = activeRawFolds.findIndex((fold) => fold.key === region.key);
+  if (existingIndex >= 0) {
+    activeRawFolds.splice(existingIndex, 1);
+  } else {
+    activeRawFolds = activeRawFolds.filter((fold) => !(fold.start > region.start && fold.end <= region.end));
+    activeRawFolds.push(region);
+  }
+  pruneRawFolds();
+  applyRawEditorDisplay();
 }
 
 function updateLineNumbers({ force = false } = {}) {
@@ -1309,12 +1454,28 @@ function updateLineNumbers({ force = false } = {}) {
 
   if (force || signature !== lastLineNumberSignature || lineCount !== lastLineNumberCount) {
     rawLineNumberList.replaceChildren();
+    rawFoldList?.replaceChildren();
+    const foldRegions = collapsibleTextEnabled ? discoverRawFoldRegions(markdownState) : [];
     for (let index = 0; index < lineCount; index += 1) {
+      const rowInfo = rawFoldDisplayRows[index] || { sourceLine: index, placeholder: false };
       const row = document.createElement('div');
       row.className = 'raw-line-number-row';
-      row.textContent = String(index + 1);
+      row.textContent = rowInfo.placeholder ? '' : String((rowInfo.sourceLine ?? index) + 1);
       row.style.height = `${metrics.heights[index] || getRawEditorLineHeight()}px`;
       rawLineNumberList.appendChild(row);
+
+      if (rawFoldList) {
+        const foldRow = document.createElement('button');
+        foldRow.type = 'button';
+        foldRow.className = 'raw-fold-row';
+        foldRow.style.height = row.style.height;
+        const region = foldRegions.find((candidate) => candidate.start === rowInfo.sourceLine);
+        const active = region && activeRawFolds.some((fold) => fold.key === region.key);
+        foldRow.textContent = region ? (active ? '▸' : '▾') : '';
+        foldRow.disabled = !region;
+        if (region) foldRow.dataset.foldKey = region.key;
+        rawFoldList.appendChild(foldRow);
+      }
     }
     lastLineNumberCount = lineCount;
     lastLineNumberSignature = signature;
@@ -1389,6 +1550,7 @@ function renderSettingsControls() {
   if (settingsWordWrap) settingsWordWrap.checked = wordWrapEnabled;
   if (settingsLineNumbers) settingsLineNumbers.checked = lineNumbersEnabled;
   if (settingsContinuePrefixes) settingsContinuePrefixes.checked = continuePrefixesEnabled;
+  if (settingsCollapsibleText) settingsCollapsibleText.checked = collapsibleTextEnabled;
   if (settingsSpellcheck) settingsSpellcheck.checked = spellcheckEnabled;
   if (settingsDictionary) {
     settingsDictionary.value = dictionaryLanguage;
@@ -1609,15 +1771,51 @@ function pad2(value) {
   return String(value).padStart(2, '0');
 }
 
+function formatTemplateDateToken(token, now) {
+  const monthsShort = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+  const monthsLong = ['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December'];
+  const replacements = {
+    yyyy: String(now.getFullYear()),
+    MMMM: monthsLong[now.getMonth()],
+    MMM: monthsShort[now.getMonth()],
+    MM: pad2(now.getMonth() + 1),
+    dd: pad2(now.getDate())
+  };
+
+  return token.replace(/yyyy|MMMM|MMM|MM|dd/g, (match) => replacements[match] || match);
+}
+
+function formatTemplateTimeToken(token, now) {
+  const hours24 = now.getHours();
+  const hours12 = hours24 % 12 || 12;
+  const replacements = {
+    HH: pad2(hours24),
+    hh: pad2(hours12),
+    mm: pad2(now.getMinutes())
+  };
+
+  return token.replace(/HH|hh|mm/g, (match) => replacements[match] || match);
+}
+
 function applyTemplateTokens(content) {
   const source = String(content || '');
   const now = new Date();
-  const dateValue = `${now.getFullYear()}-${pad2(now.getDate())}-${pad2(now.getMonth() + 1)}`;
+  const dateValue = `${now.getFullYear()}-${pad2(now.getMonth() + 1)}-${pad2(now.getDate())}`;
   const timeValue = `${pad2(now.getHours())}:${pad2(now.getMinutes())}`;
 
-  return source
+  const withLegacyTokens = source
     .replace(/\{\{date\}\}/g, dateValue)
     .replace(/\{\{time\}\}/g, timeValue);
+  return withLegacyTokens.replace(/\{\{([^{}]+)\}\}/g, (match, token) => {
+    const trimmed = String(token || '').trim();
+    if (/^(?=.*yyyy)(?=.*d)(?=.*M)[yMd\-/.\s]+$/.test(trimmed)) {
+      return formatTemplateDateToken(trimmed, now);
+    }
+    if (/^(?:HH|hh):mm$/.test(trimmed)) {
+      return formatTemplateTimeToken(trimmed, now);
+    }
+    return match;
+  });
 }
 
 function splitFrontMatter(source) {
@@ -1837,6 +2035,23 @@ function setNotesTreeWidth(width, options = {}) {
   if (options.persist !== false) saveNotesTreePreference();
 }
 
+function clampNotesTreeZoom(value) {
+  const numeric = Number(value);
+  if (!Number.isFinite(numeric)) return 1;
+  return Math.max(NOTES_TREE_MIN_ZOOM, Math.min(NOTES_TREE_MAX_ZOOM, Math.round(numeric * 100) / 100));
+}
+
+function applyNotesTreeZoom() {
+  notesTreeZoom = clampNotesTreeZoom(notesTreeZoom);
+  if (notesTreePane) notesTreePane.style.setProperty('--notes-tree-zoom', String(notesTreeZoom));
+}
+
+function setNotesTreeZoom(value, options = {}) {
+  notesTreeZoom = clampNotesTreeZoom(value);
+  applyNotesTreeZoom();
+  if (options.persist !== false) saveNotesTreePreference();
+}
+
 function headerElementForPaneKey(key) {
   if (key === 'notesTree') return notesTreePane?.querySelector('.pane-header-notes-tree') || null;
   if (key === 'outline') return tocPane?.querySelector('.pane-header-outline') || null;
@@ -1870,6 +2085,133 @@ function updatePaneHeaderPositionClasses() {
 
 function notesTreeFolderEmoji(folderPath) {
   return notesTreeFolderEmojis?.[folderPath] || '';
+}
+
+function normalizeNotesTreeSortPreference(value) {
+  const source = value && typeof value === 'object' ? value : {};
+  const normalizeGroup = (group) => ({
+    field: NOTES_TREE_SORT_FIELDS.has(group?.field) ? group.field : 'name',
+    direction: NOTES_TREE_SORT_DIRECTIONS.has(group?.direction) ? group.direction : 'asc'
+  });
+  return {
+    folders: normalizeGroup(source.folders),
+    files: normalizeGroup(source.files)
+  };
+}
+
+function notesTreeSortDirectionLabel(field, direction) {
+  if (field === 'name') return direction === 'desc' ? 'Z-A' : 'A-Z';
+  return direction === 'desc' ? 'Latest first' : 'Oldest first';
+}
+
+function notesTreeSortSummary() {
+  const folderSort = notesTreeSort.folders;
+  const fileSort = notesTreeSort.files;
+  return `Folders: ${NOTES_TREE_SORT_FIELD_LABELS[folderSort.field]}, ${notesTreeSortDirectionLabel(folderSort.field, folderSort.direction)}. Files: ${NOTES_TREE_SORT_FIELD_LABELS[fileSort.field]}, ${notesTreeSortDirectionLabel(fileSort.field, fileSort.direction)}.`;
+}
+
+function closeNotesTreeSortMenu() {
+  notesTreeSortMenu?.classList.add('hidden');
+}
+
+function closeNotesTreeContextMenu() {
+  notesTreeContextMenu?.classList.add('hidden');
+  activeNotesTreeContextPath = '';
+}
+
+function openNotesTreeContextMenu(filePath, clientX, clientY) {
+  if (!notesTreeContextMenu || !filePath) return;
+  closeAllMenus();
+  activeNotesTreeContextPath = filePath;
+  notesTreeContextMenu.classList.remove('hidden');
+  const menuRect = notesTreeContextMenu.getBoundingClientRect();
+  const left = Math.min(Math.max(8, clientX), Math.max(8, window.innerWidth - menuRect.width - 8));
+  const top = Math.min(Math.max(8, clientY), Math.max(8, window.innerHeight - menuRect.height - 8));
+  notesTreeContextMenu.style.left = `${left}px`;
+  notesTreeContextMenu.style.top = `${top}px`;
+  notesTreeContextMenu.querySelector('button')?.focus({ preventScroll: true });
+}
+
+function renderNotesTreeSortMenu() {
+  if (!notesTreeSortMenu) return;
+  notesTreeSortMenu.innerHTML = '';
+
+  const groups = [
+    { key: 'folders', title: 'Folders' },
+    { key: 'files', title: 'Files' }
+  ];
+
+  for (const group of groups) {
+    const section = document.createElement('section');
+    section.className = 'notes-tree-sort-section';
+
+    const title = document.createElement('div');
+    title.className = 'notes-tree-sort-title';
+    title.textContent = group.title;
+    section.appendChild(title);
+
+    const fields = document.createElement('div');
+    fields.className = 'notes-tree-sort-options';
+    for (const field of ['name', 'created', 'modified']) {
+      const button = document.createElement('button');
+      button.type = 'button';
+      button.dataset.action = 'set-notes-tree-sort-field';
+      button.dataset.group = group.key;
+      button.dataset.field = field;
+      button.classList.toggle('active', notesTreeSort[group.key].field === field);
+      button.textContent = NOTES_TREE_SORT_FIELD_LABELS[field];
+      fields.appendChild(button);
+    }
+    section.appendChild(fields);
+
+    const directions = document.createElement('div');
+    directions.className = 'notes-tree-sort-options';
+    for (const direction of ['asc', 'desc']) {
+      const button = document.createElement('button');
+      button.type = 'button';
+      button.dataset.action = 'set-notes-tree-sort-direction';
+      button.dataset.group = group.key;
+      button.dataset.direction = direction;
+      button.classList.toggle('active', notesTreeSort[group.key].direction === direction);
+      button.textContent = notesTreeSortDirectionLabel(notesTreeSort[group.key].field, direction);
+      directions.appendChild(button);
+    }
+    section.appendChild(directions);
+    notesTreeSortMenu.appendChild(section);
+  }
+}
+
+function toggleNotesTreeSortMenu(anchor) {
+  if (!notesTreeSortMenu || !anchor) return;
+  if (!notesTreeSortMenu.classList.contains('hidden')) {
+    closeNotesTreeSortMenu();
+    return;
+  }
+
+  closeAllMenus();
+  renderNotesTreeSortMenu();
+  const rect = anchor.getBoundingClientRect();
+  notesTreeSortMenu.classList.remove('hidden');
+  const menuRect = notesTreeSortMenu.getBoundingClientRect();
+  const left = Math.min(Math.max(8, rect.right - menuRect.width), Math.max(8, window.innerWidth - menuRect.width - 8));
+  const top = Math.min(rect.bottom + 6, Math.max(8, window.innerHeight - menuRect.height - 8));
+  notesTreeSortMenu.style.left = `${left}px`;
+  notesTreeSortMenu.style.top = `${top}px`;
+  notesTreeSortMenu.querySelector('button')?.focus({ preventScroll: true });
+}
+
+async function setNotesTreeSort(group, patch) {
+  if (group !== 'folders' && group !== 'files') return;
+  notesTreeSort = normalizeNotesTreeSortPreference({
+    ...notesTreeSort,
+    [group]: {
+      ...notesTreeSort[group],
+      ...patch
+    }
+  });
+  saveNotesTreePreference();
+  renderNotesTreeSortMenu();
+  await refreshNotesTree();
 }
 
 function openFolderEmojiEditor(folderPath) {
@@ -1948,15 +2290,35 @@ function renderNotesTreeRoot() {
     refreshButton.setAttribute('aria-label', 'Refresh notes tree');
     refreshButton.textContent = '↻';
     notesTreeRoot.appendChild(refreshButton);
+
+    const sortButton = document.createElement('button');
+    sortButton.type = 'button';
+    sortButton.className = 'notes-tree-sort-button';
+    sortButton.dataset.action = 'show-notes-tree-sort-menu';
+    sortButton.title = notesTreeSortSummary();
+    sortButton.setAttribute('aria-label', 'Sort notes tree');
+    sortButton.textContent = '⇅';
+    notesTreeRoot.appendChild(sortButton);
   }
 }
 
-function renderNotesTreeNode(node, depth = 0) {
+function notesTreeRainbowColorForIndex(index) {
+  return NOTES_TREE_RAINBOW_COLORS[index % NOTES_TREE_RAINBOW_COLORS.length];
+}
+
+function renderNotesTreeNode(node, depth = 0, inheritedColor = '', siblingIndex = 0) {
   const row = document.createElement('div');
   row.className = `notes-tree-row notes-tree-${node.type}`;
   row.style.setProperty('--depth', String(depth));
   row.dataset.path = node.path;
   row.dataset.type = node.type;
+  const rowColor = notesTreeRainbowFolders
+    ? (depth === 1 && node.type === 'folder' ? notesTreeRainbowColorForIndex(siblingIndex) : inheritedColor)
+    : '';
+  if (rowColor) {
+    row.classList.add('rainbow');
+    row.style.setProperty('--notes-tree-rainbow-color', rowColor);
+  }
 
   if (node.type === 'folder') {
     const expanded = notesTreeExpandedPaths.has(node.path);
@@ -1992,8 +2354,8 @@ function renderNotesTreeNode(node, depth = 0) {
     const fragment = document.createDocumentFragment();
     fragment.appendChild(row);
     if (expanded) {
-      for (const child of node.children || []) {
-        fragment.appendChild(renderNotesTreeNode(child, depth + 1));
+      for (const [index, child] of (node.children || []).entries()) {
+        fragment.appendChild(renderNotesTreeNode(child, depth + 1, rowColor, index));
       }
     }
     return fragment;
@@ -2054,7 +2416,9 @@ function renderNotesTree() {
   if (notesTreeTruncated) {
     const truncated = document.createElement('div');
     truncated.className = 'notes-tree-empty';
-    truncated.textContent = 'Tree truncated. Narrow the selected folder for more detail.';
+    truncated.textContent = notesTreeItemLimit > 0
+      ? `Only the first ${notesTreeItemLimit.toLocaleString()} notes tree items are shown. Choose a smaller folder if something is missing.`
+      : 'Only part of the notes tree is shown. Choose a smaller folder if something is missing.';
     notesTreeList.appendChild(truncated);
   }
 }
@@ -2065,6 +2429,9 @@ function saveNotesTreePreference() {
     position: notesTreePosition,
     rootPath: notesTreeRootPath,
     folderEmojis: notesTreeFolderEmojis,
+    sort: notesTreeSort,
+    rainbowFolders: notesTreeRainbowFolders,
+    zoom: notesTreeZoom,
     width: notesTreeWidth
   });
 }
@@ -2074,6 +2441,7 @@ async function refreshNotesTree() {
     notesTreeData = null;
     notesTreeError = '';
     notesTreeTruncated = false;
+    notesTreeItemLimit = 0;
     renderNotesTree();
     return;
   }
@@ -2081,16 +2449,18 @@ async function refreshNotesTree() {
   notesTreeLoading = true;
   notesTreeError = '';
   renderNotesTree();
-  const result = await window.nativeApi.readNotesTree({ rootPath: notesTreeRootPath });
+  const result = await window.nativeApi.readNotesTree({ rootPath: notesTreeRootPath, sort: notesTreeSort });
   notesTreeLoading = false;
   if (!result?.loaded) {
     notesTreeData = null;
     notesTreeError = result?.error || 'Unable to load notes folder';
     notesTreeTruncated = false;
+    notesTreeItemLimit = 0;
   } else {
     notesTreeData = result.tree;
     notesTreeError = '';
     notesTreeTruncated = result.truncated === true;
+    notesTreeItemLimit = Number(result.itemLimit || 0);
     if (notesTreeData?.path) notesTreeExpandedPaths.add(notesTreeData.path);
   }
   renderNotesTree();
@@ -2128,16 +2498,37 @@ function setNotesTreePosition(position, options = {}) {
   if (persist) saveNotesTreePreference();
 }
 
+function setNotesTreeRainbowFolders(enabled, options = {}) {
+  const persist = options.persist !== false;
+  notesTreeRainbowFolders = enabled === true;
+  renderNotesTree();
+  updateMenuChecks();
+  notifyNativeMenuState();
+  if (persist) saveNotesTreePreference();
+}
+
 async function loadNotesTreePreference() {
   const result = await window.nativeApi.loadNotesTreePreference();
   if (!result?.loaded) {
-    return { visible: false, position: 'left', rootPath: null, folderEmojis: {}, width: NOTES_TREE_DEFAULT_WIDTH };
+    return {
+      visible: false,
+      position: 'left',
+      rootPath: null,
+      folderEmojis: {},
+      sort: normalizeNotesTreeSortPreference(),
+      rainbowFolders: false,
+      zoom: 1,
+      width: NOTES_TREE_DEFAULT_WIDTH
+    };
   }
   return {
     visible: result.visible === true,
     position: result.position === 'right' ? 'right' : 'left',
     rootPath: result.rootPath || null,
     folderEmojis: result.folderEmojis && typeof result.folderEmojis === 'object' ? result.folderEmojis : {},
+    sort: normalizeNotesTreeSortPreference(result.sort),
+    rainbowFolders: result.rainbowFolders === true,
+    zoom: clampNotesTreeZoom(result.zoom),
     width: clampNotesTreeWidth(result.width)
   };
 }
@@ -2368,6 +2759,8 @@ function updateMenuChecks() {
   const wordWrapToggle = document.querySelector('[data-toggle="word-wrap"]');
   const lineNumbersToggle = document.querySelector('[data-toggle="line-numbers"]');
   const continuePrefixesToggle = document.querySelector('[data-toggle="continue-prefixes"]');
+  const collapsibleTextToggle = document.querySelector('[data-toggle="collapsible-text"]');
+  const templatesEnabledToggle = document.querySelector('[data-toggle="templates-enabled"]');
   const mermaidPreviewToggle = document.querySelector('[data-toggle="mermaid-preview"]');
   const outlineToggle = document.querySelector('[data-toggle="outline-view"]');
   const outlineLeftToggle = document.querySelector('[data-toggle="outline-left"]');
@@ -2375,6 +2768,7 @@ function updateMenuChecks() {
   const notesTreeToggle = document.querySelector('[data-toggle="notes-tree-view"]');
   const notesTreeLeftToggle = document.querySelector('[data-toggle="notes-tree-left"]');
   const notesTreeRightToggle = document.querySelector('[data-toggle="notes-tree-right"]');
+  const notesTreeRainbowToggle = document.querySelector('[data-toggle="notes-tree-rainbow"]');
   const exportHtmlDefault = document.querySelector('[data-toggle="export-html-default"]');
   const exportHtmlArticle = document.querySelector('[data-toggle="export-html-article"]');
   const exportHtmlCompact = document.querySelector('[data-toggle="export-html-compact"]');
@@ -2415,6 +2809,8 @@ function updateMenuChecks() {
   if (wordWrapToggle) wordWrapToggle.classList.toggle('checked', wordWrapEnabled);
   if (lineNumbersToggle) lineNumbersToggle.classList.toggle('checked', lineNumbersEnabled);
   if (continuePrefixesToggle) continuePrefixesToggle.classList.toggle('checked', continuePrefixesEnabled);
+  if (collapsibleTextToggle) collapsibleTextToggle.classList.toggle('checked', collapsibleTextEnabled);
+  if (templatesEnabledToggle) templatesEnabledToggle.classList.toggle('checked', templatesEnabled);
   if (mermaidPreviewToggle) mermaidPreviewToggle.classList.toggle('checked', mermaidPreviewEnabled);
   if (outlineToggle) outlineToggle.classList.toggle('checked', outlineVisible);
   if (outlineLeftToggle) outlineLeftToggle.classList.toggle('checked', outlinePosition === 'left');
@@ -2424,8 +2820,10 @@ function updateMenuChecks() {
   if (notesTreeToggle) notesTreeToggle.classList.toggle('checked', notesTreeVisible);
   if (notesTreeLeftToggle) notesTreeLeftToggle.classList.toggle('checked', notesTreePosition === 'left');
   if (notesTreeRightToggle) notesTreeRightToggle.classList.toggle('checked', notesTreePosition === 'right');
+  if (notesTreeRainbowToggle) notesTreeRainbowToggle.classList.toggle('checked', notesTreeRainbowFolders);
   if (notesTreeLeftToggle) notesTreeLeftToggle.disabled = !notesTreeVisible;
   if (notesTreeRightToggle) notesTreeRightToggle.disabled = !notesTreeVisible;
+  if (notesTreeRainbowToggle) notesTreeRainbowToggle.disabled = !notesTreeVisible;
   if (exportHtmlDefault) exportHtmlDefault.classList.toggle('checked', exportHtmlPreset === 'default');
   if (exportHtmlArticle) exportHtmlArticle.classList.toggle('checked', exportHtmlPreset === 'article');
   if (exportHtmlCompact) exportHtmlCompact.classList.toggle('checked', exportHtmlPreset === 'compact');
@@ -2453,6 +2851,7 @@ function notifyNativeMenuState() {
     showRaw,
     showFormatted,
     showMindmap,
+    currentFilePath,
     mindmapLayout: mindmapView.getLayout(),
     darkMode,
     darkModeMode,
@@ -2467,11 +2866,14 @@ function notifyNativeMenuState() {
     wordWrapEnabled,
     lineNumbersEnabled,
     continuePrefixesEnabled,
+    collapsibleTextEnabled,
+    templatesEnabled,
     mermaidPreviewEnabled,
     outlineVisible,
     outlinePosition,
     notesTreeVisible,
     notesTreePosition,
+    notesTreeRainbowFolders,
     exportHtmlPreset,
     exportPdfPreset,
     exportDocxPreset,
@@ -2904,8 +3306,30 @@ function setLineNumbersEnabled(enabled, options = {}) {
   notifyNativeMenuState();
 }
 
+function setCollapsibleTextEnabled(enabled, options = {}) {
+  const persist = options.persist !== false;
+  collapsibleTextEnabled = enabled === true;
+  rawEditorShell?.classList.toggle('collapsible-text-enabled', collapsibleTextEnabled);
+  if (!collapsibleTextEnabled) {
+    activeRawFolds = [];
+  }
+  applyRawEditorDisplay();
+  if (persist) {
+    void window.nativeApi.saveCollapsibleTextPreference({ enabled: collapsibleTextEnabled });
+  }
+  renderSettingsControls();
+  updateMenuChecks();
+  notifyNativeMenuState();
+}
+
 async function loadLineNumbersPreference() {
   const result = await window.nativeApi.loadLineNumbersPreference();
+  if (!result?.loaded) return false;
+  return result.enabled === true;
+}
+
+async function loadCollapsibleTextPreference() {
+  const result = await window.nativeApi.loadCollapsibleTextPreference();
   if (!result?.loaded) return false;
   return result.enabled === true;
 }
@@ -4157,7 +4581,8 @@ function renderFromMarkdown(source) {
   if (html !== lastRenderedHtml) {
     if (!suppressRawHandler && document.activeElement !== rawEditor) {
       suppressRawHandler = true;
-      rawEditor.value = markdownState;
+      pruneRawFolds();
+      rawEditor.value = activeRawFolds.length > 0 ? buildRawEditorDisplay() : markdownState;
       updateLineNumbers({ force: true });
       suppressRawHandler = false;
       syncRawSnapshot();
@@ -4403,6 +4828,10 @@ function scheduleRawScrollSync() {
 
 function handleRawEdit() {
   if (suppressRawHandler) return;
+  if (activeRawFolds.length > 0) {
+    expandAllRawFolds();
+    return;
+  }
   if (!isApplyingRawHistory) {
     rawUndoStack.push(lastRawSnapshot);
     if (rawUndoStack.length > 500) rawUndoStack.shift();
@@ -4883,6 +5312,8 @@ function runEditCommand(action) {
 
 function setMarkdownProgrammatically(nextMarkdown, selectionStart = null, selectionEnd = null, options = {}) {
   const focusRaw = options.focusRaw !== false;
+  activeRawFolds = [];
+  rawFoldDisplayRows = [];
   suppressRawHandler = true;
   rawEditor.value = nextMarkdown;
   updateLineNumbers({ force: true });
@@ -5356,6 +5787,8 @@ function applyLoadedDocument(loaded) {
   currentFileName = loaded.name || (loaded.path ? basename(loaded.path) : 'Untitled.md');
   docSessionKey = loaded.path || loaded.sourcePath || docSessionKey;
   markdownState = loaded.content;
+  activeRawFolds = [];
+  rawFoldDisplayRows = [];
   lastSavedAt = loaded.lastSavedAt || null;
   rawEditor.value = markdownState;
   updateLineNumbers({ force: true });
@@ -5422,6 +5855,8 @@ async function createNewDocument(options = {}) {
   currentFileName = 'Untitled.md';
   docSessionKey = `untitled-${Math.random().toString(36).slice(2, 10)}`;
   markdownState = initialContent;
+  activeRawFolds = [];
+  rawFoldDisplayRows = [];
   lastSavedAt = null;
   rawEditor.value = markdownState;
   updateLineNumbers({ force: true });
@@ -5445,23 +5880,62 @@ async function createNewDocumentFromTemplate() {
   });
 }
 
+async function createNewDocumentUsingTemplate(template) {
+  const templateContent = applyTemplateTokens(template?.content || '');
+  await createNewDocument({
+    initialContent: templateContent,
+    markDirty: templateContent.length > 0
+  });
+}
+
+async function createNewDocumentWithTemplatePreference() {
+  const saved = await loadDefaultTemplate();
+  if (!templatesEnabled) {
+    await createNewDocument();
+    return;
+  }
+
+  if (saved?.loaded) {
+    await createNewDocumentUsingTemplate(saved);
+    return;
+  }
+
+  const template = await window.nativeApi.chooseTemplateFile();
+  if (!template?.path) return;
+  await createNewDocumentUsingTemplate(template);
+}
+
 async function setDefaultTemplate() {
   const template = await window.nativeApi.chooseTemplateFile();
   if (!template?.path) return;
-  await window.nativeApi.saveDefaultTemplatePreference({ path: template.path });
+  templatesEnabled = true;
+  await window.nativeApi.saveDefaultTemplatePreference({ path: template.path, enabled: templatesEnabled });
   defaultTemplatePath = template.path;
+  updateMenuChecks();
+  notifyNativeMenuState();
   const name = template.name || basename(template.path);
   window.alert(`Default template set to "${name}".`);
 }
 
 async function resetDefaultTemplate() {
-  await window.nativeApi.saveDefaultTemplatePreference({ path: null });
+  await window.nativeApi.saveDefaultTemplatePreference({ path: null, enabled: templatesEnabled });
   defaultTemplatePath = null;
   window.alert('Default template has been reset.');
 }
 
+async function setTemplatesEnabled(enabled, options = {}) {
+  const persist = options.persist !== false;
+  templatesEnabled = enabled === true;
+  updateMenuChecks();
+  notifyNativeMenuState();
+  if (persist) {
+    await window.nativeApi.saveDefaultTemplatePreference({ path: defaultTemplatePath, enabled: templatesEnabled });
+  }
+}
+
 async function loadDefaultTemplate() {
   const saved = await window.nativeApi.loadDefaultTemplatePreference();
+  templatesEnabled = saved?.enabled === true;
   if (!saved?.loaded) {
     defaultTemplatePath = null;
     if (saved?.invalidPath) {
@@ -5472,6 +5946,66 @@ async function loadDefaultTemplate() {
 
   defaultTemplatePath = saved.path || null;
   return saved;
+}
+
+async function setDefaultSaveFolder() {
+  const result = await window.nativeApi.chooseDefaultSaveFolder();
+  if (!result?.saved) return;
+  window.alert(`Default save folder set to "${result.name || result.path}".`);
+}
+
+async function resetDefaultSaveFolder() {
+  const result = await window.nativeApi.resetDefaultSaveFolder();
+  if (result?.saved) {
+    window.alert('Default save folder has been reset.');
+  }
+}
+
+function applyMovedCurrentFile(result) {
+  currentFilePath = result.path;
+  currentFileName = result.name || basename(result.path);
+  docSessionKey = currentFilePath || docSessionKey;
+  updateWindowTitle();
+  publishSessionState();
+  void refreshRecentFilesMenu();
+}
+
+async function moveFilePath(filePath, options = {}) {
+  if (!filePath) return null;
+  const result = await window.nativeApi.moveFile({ path: filePath });
+  if (!result?.moved) {
+    if (result?.error) window.alert(`Move failed: ${result.error}`);
+    return null;
+  }
+  if (options.updateCurrent || filePath === currentFilePath) {
+    applyMovedCurrentFile(result);
+    await addRecentFile(result.path);
+  }
+  await refreshNotesTree();
+  return result;
+}
+
+async function moveCurrentFile() {
+  if (!currentFilePath) {
+    window.alert('Save the document before moving it.');
+    return;
+  }
+  if (isDirty) {
+    const saved = await saveCurrentFile(false);
+    if (!saved) return;
+  }
+  await moveFilePath(currentFilePath, { updateCurrent: true });
+}
+
+async function duplicateFilePath(filePath) {
+  if (!filePath) return null;
+  const result = await window.nativeApi.duplicateFile({ path: filePath });
+  if (!result?.duplicated) {
+    if (result?.error) window.alert(`Duplicate failed: ${result.error}`);
+    return null;
+  }
+  await refreshNotesTree();
+  return result;
 }
 
 async function saveCurrentFile(saveAs = false, options = {}) {
@@ -5661,6 +6195,8 @@ function closeAllMenus() {
     group.classList.remove('open');
   }
   closeCalloutMenu();
+  closeNotesTreeSortMenu();
+  closeNotesTreeContextMenu();
 }
 
 async function confirmUnsavedChanges(context) {
@@ -5679,18 +6215,7 @@ async function confirmUnsavedChanges(context) {
 async function handleAction(action, payload = {}) {
   switch (action) {
     case 'file-new':
-      {
-        const defaultTemplate = await loadDefaultTemplate();
-        if (defaultTemplate?.loaded) {
-          const templateContent = applyTemplateTokens(defaultTemplate.content || '');
-          await createNewDocument({
-            initialContent: templateContent,
-            markDirty: templateContent.length > 0
-          });
-        } else {
-          await createNewDocument();
-        }
-      }
+      await createNewDocumentWithTemplatePreference();
       break;
     case 'file-new-from-template':
       await createNewDocumentFromTemplate();
@@ -5700,6 +6225,12 @@ async function handleAction(action, payload = {}) {
       break;
     case 'file-reset-default-template':
       await resetDefaultTemplate();
+      break;
+    case 'toggle-templates-enabled':
+      await setTemplatesEnabled(!templatesEnabled);
+      break;
+    case 'set-templates-enabled':
+      await setTemplatesEnabled(Boolean(payload.enabled));
       break;
     case 'file-new-window':
       window.nativeApi.newWindow();
@@ -5725,6 +6256,15 @@ async function handleAction(action, payload = {}) {
       break;
     case 'file-save-as':
       await saveCurrentFile(true);
+      break;
+    case 'file-set-default-save-folder':
+      await setDefaultSaveFolder();
+      break;
+    case 'file-reset-default-save-folder':
+      await resetDefaultSaveFolder();
+      break;
+    case 'file-move-current':
+      await moveCurrentFile();
       break;
     case 'file-export-pages':
       await exportToPages();
@@ -5894,6 +6434,15 @@ async function handleAction(action, payload = {}) {
     case 'zoom-mindmap-fit':
       mindmapView.fitToView();
       break;
+    case 'zoom-notes-tree-in':
+      setNotesTreeZoom(notesTreeZoom + 0.1);
+      break;
+    case 'zoom-notes-tree-out':
+      setNotesTreeZoom(notesTreeZoom - 0.1);
+      break;
+    case 'zoom-notes-tree-reset':
+      setNotesTreeZoom(1);
+      break;
     case 'export-mindmap-svg':
       await mindmapView.exportSvg();
       break;
@@ -6009,6 +6558,12 @@ async function handleAction(action, payload = {}) {
     case 'set-line-numbers':
       setLineNumbersEnabled(Boolean(payload.enabled));
       break;
+    case 'toggle-collapsible-text':
+      setCollapsibleTextEnabled(!collapsibleTextEnabled);
+      break;
+    case 'set-collapsible-text':
+      setCollapsibleTextEnabled(Boolean(payload.enabled));
+      break;
     case 'toggle-continue-prefixes':
       setContinuePrefixesEnabled(!continuePrefixesEnabled);
       break;
@@ -6054,6 +6609,12 @@ async function handleAction(action, payload = {}) {
       if (payload.position === 'left' || payload.position === 'right') {
         setNotesTreePosition(payload.position);
       }
+      break;
+    case 'toggle-notes-tree-rainbow':
+      setNotesTreeRainbowFolders(!notesTreeRainbowFolders);
+      break;
+    case 'set-notes-tree-rainbow':
+      setNotesTreeRainbowFolders(Boolean(payload.enabled));
       break;
     case 'choose-notes-tree-root':
       await chooseNotesTreeRoot();
@@ -6118,7 +6679,14 @@ function wireMenus() {
 
   document.addEventListener('click', (event) => {
     const target = event.target;
-    if (!target.closest('.menu-group') && !target.closest('#callout-menu') && !target.closest('[data-action="show-callout-menu"]')) {
+    if (
+      !target.closest('.menu-group')
+      && !target.closest('#callout-menu')
+      && !target.closest('#notes-tree-sort-menu')
+      && !target.closest('#notes-tree-context-menu')
+      && !target.closest('[data-action="show-callout-menu"]')
+      && !target.closest('[data-action="show-notes-tree-sort-menu"]')
+    ) {
       closeAllMenus();
     }
   });
@@ -6166,6 +6734,13 @@ function wireMenus() {
   }
 
   if (notesTreePane) {
+    notesTreePane.addEventListener('contextmenu', (event) => {
+      const row = event.target.closest('.notes-tree-row[data-type="file"][data-path]');
+      if (!row) return;
+      event.preventDefault();
+      openNotesTreeContextMenu(row.dataset.path, event.clientX, event.clientY);
+    });
+
     notesTreePane.addEventListener('click', (event) => {
       const target = event.target;
       const button = target.closest('button[data-action]');
@@ -6190,7 +6765,45 @@ function wireMenus() {
         return;
       }
 
+      if (action === 'show-notes-tree-sort-menu') {
+        toggleNotesTreeSortMenu(button);
+        return;
+      }
+
       void handleAction(action);
+    });
+  }
+
+  if (notesTreeSortMenu) {
+    notesTreeSortMenu.addEventListener('click', (event) => {
+      const target = event.target;
+      const button = target.closest('button[data-action]');
+      if (!button) return;
+      const group = button.dataset.group;
+      if (button.dataset.action === 'set-notes-tree-sort-field') {
+        void setNotesTreeSort(group, { field: button.dataset.field });
+        return;
+      }
+      if (button.dataset.action === 'set-notes-tree-sort-direction') {
+        void setNotesTreeSort(group, { direction: button.dataset.direction });
+      }
+    });
+  }
+
+  if (notesTreeContextMenu) {
+    notesTreeContextMenu.addEventListener('click', (event) => {
+      const target = event.target;
+      const button = target.closest('button[data-action]');
+      if (!button || !activeNotesTreeContextPath) return;
+      const filePath = activeNotesTreeContextPath;
+      closeNotesTreeContextMenu();
+      if (button.dataset.action === 'move-notes-tree-file') {
+        void moveFilePath(filePath);
+        return;
+      }
+      if (button.dataset.action === 'duplicate-notes-tree-file') {
+        void duplicateFilePath(filePath);
+      }
     });
   }
 
@@ -6400,6 +7013,11 @@ function wireEvents() {
   }
 
   rawEditor.addEventListener('input', handleRawEdit);
+  rawEditor.addEventListener('beforeinput', (event) => {
+    if (activeRawFolds.length === 0) return;
+    event.preventDefault();
+    expandAllRawFolds();
+  });
   rawEditor.addEventListener('keyup', () => {
     syncPreviewToRawCursor();
     publishSessionState();
@@ -6417,6 +7035,14 @@ function wireEvents() {
     schedulePreviewScrollSync();
     publishSessionState();
   });
+  if (rawFoldList) {
+    rawFoldList.addEventListener('click', (event) => {
+      const button = event.target.closest('.raw-fold-row[data-fold-key]');
+      if (!button) return;
+      const region = discoverRawFoldRegions(markdownState).find((candidate) => candidate.key === button.dataset.foldKey);
+      toggleRawFold(region);
+    });
+  }
   rawEditor.addEventListener('paste', (event) => {
     const files = [...(event.clipboardData?.files || [])];
     const hasImage = files.some((file) => String(file.type || '').startsWith('image/'));
@@ -6559,6 +7185,9 @@ function wireEvents() {
   if (settingsContinuePrefixes) {
     settingsContinuePrefixes.addEventListener('change', () => setContinuePrefixesEnabled(settingsContinuePrefixes.checked));
   }
+  if (settingsCollapsibleText) {
+    settingsCollapsibleText.addEventListener('change', () => setCollapsibleTextEnabled(settingsCollapsibleText.checked));
+  }
   if (settingsSpellcheck) {
     settingsSpellcheck.addEventListener('change', () => {
       setSpellcheckEnabled(settingsSpellcheck.checked);
@@ -6642,9 +7271,13 @@ function bootstrap() {
     diagnosticLog('renderer.startup.keybindings.loaded');
     if (!hasRestoredSessionState) {
       const defaultTemplate = await loadDefaultTemplate();
-      if (defaultTemplate?.loaded) {
+      updateMenuChecks();
+      notifyNativeMenuState();
+      if (templatesEnabled && defaultTemplate?.loaded) {
         const templateContent = applyTemplateTokens(defaultTemplate.content || '');
         markdownState = templateContent;
+        activeRawFolds = [];
+        rawFoldDisplayRows = [];
         rawEditor.value = templateContent;
         updateLineNumbers({ force: true });
         renderFromMarkdown(templateContent);
@@ -6690,6 +7323,10 @@ function bootstrap() {
     setLineNumbersEnabled(savedLineNumbers, { persist: false });
     diagnosticLog('renderer.startup.line-numbers.loaded', { enabled: savedLineNumbers });
 
+    const savedCollapsibleText = await loadCollapsibleTextPreference();
+    setCollapsibleTextEnabled(savedCollapsibleText, { persist: false });
+    diagnosticLog('renderer.startup.collapsible-text.loaded', { enabled: savedCollapsibleText });
+
     const savedContinuePrefixes = await loadContinuePrefixesPreference();
     setContinuePrefixesEnabled(savedContinuePrefixes, { persist: false });
     diagnosticLog('renderer.startup.continue-prefixes.loaded', { enabled: savedContinuePrefixes });
@@ -6721,7 +7358,11 @@ function bootstrap() {
     const savedNotesTree = await loadNotesTreePreference();
     notesTreeRootPath = savedNotesTree.rootPath;
     notesTreeFolderEmojis = savedNotesTree.folderEmojis;
+    notesTreeSort = savedNotesTree.sort;
+    notesTreeRainbowFolders = savedNotesTree.rainbowFolders;
+    notesTreeZoom = savedNotesTree.zoom;
     notesTreeWidth = savedNotesTree.width;
+    applyNotesTreeZoom();
     if (notesTreeRootPath) notesTreeExpandedPaths.add(notesTreeRootPath);
     setNotesTreePosition(savedNotesTree.position, { persist: false });
     setNotesTreeVisible(savedNotesTree.visible, { persist: false });

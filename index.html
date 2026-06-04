@@ -21,6 +21,7 @@
             <button data-action="file-new-window"><span class="menu-item-main"><img class="menu-item-icon" src="./assets/sf-symbols/new.png" alt="" aria-hidden="true" />New Window</span><span class="shortcut">⇧⌘N</span></button>
             <button data-action="file-new-from-template"><span class="menu-item-main"><img class="menu-item-icon" src="./assets/sf-symbols/new.png" alt="" aria-hidden="true" />New from Template...</span><span class="shortcut">⌥⌘N</span></button>
             <div class="menu-separator"></div>
+            <button data-action="toggle-templates-enabled" data-toggle="templates-enabled">Enable Templates</button>
             <button data-action="file-set-default-template">Set Default Template...</button>
             <button data-action="file-reset-default-template">Reset Default Template</button>
             <div class="menu-separator"></div>
@@ -31,6 +32,10 @@
             <div class="menu-separator"></div>
             <button data-action="file-save"><span>Save</span><span class="shortcut">⌘S</span></button>
             <button data-action="file-save-as"><span>Export...</span><span class="shortcut">⇧⌘S</span></button>
+            <div class="menu-separator"></div>
+            <button data-action="file-set-default-save-folder">Set Default Save Folder...</button>
+            <button data-action="file-reset-default-save-folder">Reset Default Save Folder</button>
+            <div class="menu-separator"></div>
             <button data-action="export-mindmap-svg">Export Mindmap...</button>
             <button data-action="open-version-history">Version History...</button>
             <div class="menu-separator"></div>
@@ -100,11 +105,16 @@
             <button data-action="zoom-mindmap-out">Mindmap Zoom Out</button>
             <button data-action="zoom-mindmap-reset">Reset Mindmap Zoom</button>
             <button data-action="zoom-mindmap-fit">Fit Mindmap</button>
+            <div class="menu-subheader">Notes Tree</div>
+            <button data-action="zoom-notes-tree-in">Notes Tree Zoom In</button>
+            <button data-action="zoom-notes-tree-out">Notes Tree Zoom Out</button>
+            <button data-action="zoom-notes-tree-reset">Reset Notes Tree Zoom</button>
             <div class="menu-separator"></div>
             <button data-action="toggle-sync-views" data-toggle="sync-views">Syncronise Views</button>
             <button data-action="toggle-word-wrap" data-toggle="word-wrap">Word Wrap</button>
             <button data-action="toggle-line-numbers" data-toggle="line-numbers">Line Numbers</button>
             <button data-action="toggle-continue-prefixes" data-toggle="continue-prefixes">Continue Lists and Quotes</button>
+            <button data-action="toggle-collapsible-text" data-toggle="collapsible-text">Enable Collapsable Text</button>
             <div class="menu-separator"></div>
             <button data-action="toggle-outline-view" data-toggle="outline-view">Show Outline</button>
             <button data-action="outline-left" data-toggle="outline-left">Outline Left</button>
@@ -113,6 +123,7 @@
             <button data-action="toggle-notes-tree-view" data-toggle="notes-tree-view">Show Notes Tree</button>
             <button data-action="notes-tree-left" data-toggle="notes-tree-left">Notes Tree Left</button>
             <button data-action="notes-tree-right" data-toggle="notes-tree-right">Notes Tree Right</button>
+            <button data-action="toggle-notes-tree-rainbow" data-toggle="notes-tree-rainbow">Rainbow Coloured Folders</button>
             <button data-action="choose-notes-tree-root">Choose Notes Folder...</button>
             <div class="menu-separator"></div>
             <button data-action="horizontal-view" data-toggle="horizontal-view">Horizontal View</button>
@@ -226,6 +237,12 @@
         <button type="button" data-action="format-callout" data-callout="caution" role="menuitem">Caution</button>
       </div>
 
+      <div id="notes-tree-sort-menu" class="notes-tree-sort-menu no-drag hidden" role="menu" aria-label="Notes tree sort options"></div>
+      <div id="notes-tree-context-menu" class="notes-tree-context-menu no-drag hidden" role="menu" aria-label="Notes tree context menu">
+        <button type="button" data-action="move-notes-tree-file" role="menuitem">Move...</button>
+        <button type="button" data-action="duplicate-notes-tree-file" role="menuitem">Duplicate</button>
+      </div>
+
       <div id="theme-debug" class="theme-debug no-drag">Theme debug: waiting...</div>
 
       <main id="workspace" class="workspace mode-raw">
@@ -234,6 +251,9 @@
           <div id="raw-editor-shell" class="raw-editor-shell">
             <div id="raw-line-number-gutter" class="raw-line-number-gutter" aria-hidden="true">
               <div id="raw-line-number-list" class="raw-line-number-list">1</div>
+            </div>
+            <div id="raw-fold-gutter" class="raw-fold-gutter" aria-label="Markdown folding controls">
+              <div id="raw-fold-list" class="raw-fold-list"></div>
             </div>
             <textarea id="raw-editor" wrap="off" spellcheck="true" aria-label="Raw Markdown editor" placeholder="Start writing Markdown..."></textarea>
           </div>
@@ -377,6 +397,7 @@
               <label class="settings-check"><input id="settings-word-wrap" type="checkbox" /> Word wrap</label>
               <label class="settings-check"><input id="settings-line-numbers" type="checkbox" /> Line numbers</label>
               <label class="settings-check"><input id="settings-continue-prefixes" type="checkbox" /> Continue lists and quotes on Return</label>
+              <label class="settings-check"><input id="settings-collapsible-text" type="checkbox" /> Enable collapsable text</label>
             </section>
             <section class="settings-card" aria-label="Proofing settings">
               <div class="settings-card-title">Proofing</div>

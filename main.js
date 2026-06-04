@@ -48,7 +48,9 @@ const MIN_WINDOW_BOUNDS = {
 };
 const NOTES_TREE_FILE_EXTENSIONS = new Set(['.md', '.markdown', '.txt', '.mmap']);
 const NOTES_TREE_MAX_DEPTH = 8;
-const NOTES_TREE_MAX_ITEMS = 1500;
+const NOTES_TREE_MAX_ITEMS = 10000;
+const NOTES_TREE_SORT_FIELDS = new Set(['name', 'created', 'modified']);
+const NOTES_TREE_SORT_DIRECTIONS = new Set(['asc', 'desc']);
 
 function getDiagnosticsPath() {
   if (diagnosticsPathCache) return diagnosticsPathCache;
@@ -379,7 +381,80 @@ function isNotesTreeFilePath(filePath) {
   return NOTES_TREE_FILE_EXTENSIONS.has(path.extname(String(filePath || '')).toLowerCase());
 }
 
-async function buildNotesTreeNode(entryPath, rootPath, depth, budget) {
+async function pathExists(filePath) {
+  try {
+    await fs.access(filePath);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+async function uniqueCopyPath(sourcePath) {
+  const directory = path.dirname(sourcePath);
+  const extension = path.extname(sourcePath);
+  const stem = path.basename(sourcePath, extension);
+  let candidate = path.join(directory, `${stem} copy${extension}`);
+  let index = 2;
+  while (await pathExists(candidate)) {
+    candidate = path.join(directory, `${stem} copy ${index}${extension}`);
+    index += 1;
+  }
+  return candidate;
+}
+
+async function resolveSaveDialogDefaultPath(suggestedPath) {
+  const settings = await readSettings();
+  const defaultSaveFolder = typeof settings.defaultSaveFolder === 'string' ? settings.defaultSaveFolder : '';
+  const suggested = suggestedPath || 'Untitled.md';
+  if (path.isAbsolute(suggested) || !defaultSaveFolder) return suggested;
+  if (!(await pathExists(defaultSaveFolder))) return suggested;
+  return path.join(defaultSaveFolder, path.basename(suggested));
+}
+
+function resolveSaveDialogDefaultPathSync(suggestedPath) {
+  const settings = readSettingsSync();
+  const defaultSaveFolder = typeof settings.defaultSaveFolder === 'string' ? settings.defaultSaveFolder : '';
+  const suggested = suggestedPath || 'Untitled.md';
+  if (path.isAbsolute(suggested) || !defaultSaveFolder || !fsSync.existsSync(defaultSaveFolder)) return suggested;
+  return path.join(defaultSaveFolder, path.basename(suggested));
+}
+
+function normalizeNotesTreeSortPreference(value) {
+  const source = value && typeof value === 'object' ? value : {};
+  const normalizeGroup = (group, fallbackDirection = 'asc') => {
+    const field = NOTES_TREE_SORT_FIELDS.has(group?.field) ? group.field : 'name';
+    const direction = NOTES_TREE_SORT_DIRECTIONS.has(group?.direction) ? group.direction : fallbackDirection;
+    return { field, direction };
+  };
+  return {
+    folders: normalizeGroup(source.folders, 'asc'),
+    files: normalizeGroup(source.files, 'asc')
+  };
+}
+
+function notesTreeTimestampForSort(node, field) {
+  if (field === 'created') return node.createdMs || 0;
+  if (field === 'modified') return node.modifiedMs || 0;
+  return 0;
+}
+
+function compareNotesTreeNodes(left, right, sortPreference) {
+  const field = sortPreference.field;
+  const direction = sortPreference.direction === 'desc' ? -1 : 1;
+  let result = 0;
+  if (field === 'name') {
+    result = left.name.localeCompare(right.name, undefined, { sensitivity: 'base', numeric: true });
+  } else {
+    result = notesTreeTimestampForSort(left, field) - notesTreeTimestampForSort(right, field);
+    if (result === 0) {
+      result = left.name.localeCompare(right.name, undefined, { sensitivity: 'base', numeric: true });
+    }
+  }
+  return result * direction;
+}
+
+async function buildNotesTreeNode(entryPath, rootPath, depth, budget, sortPreference) {
   if (budget.count >= NOTES_TREE_MAX_ITEMS) return null;
   let stats;
   try {
@@ -398,6 +473,8 @@ async function buildNotesTreeNode(entryPath, rootPath, depth, budget) {
       name: entryPath === rootPath ? path.basename(entryPath) || entryPath : name,
       path: entryPath,
       relativePath: path.relative(rootPath, entryPath),
+      createdMs: stats.birthtimeMs,
+      modifiedMs: stats.mtimeMs,
       children: []
     };
     if (depth >= NOTES_TREE_MAX_DEPTH) return node;
@@ -409,18 +486,22 @@ async function buildNotesTreeNode(entryPath, rootPath, depth, budget) {
       return node;
     }
 
-    entries.sort((left, right) => {
-      if (left.isDirectory() !== right.isDirectory()) return left.isDirectory() ? -1 : 1;
-      return left.name.localeCompare(right.name, undefined, { sensitivity: 'base', numeric: true });
-    });
-
+    const childNodes = [];
     for (const entry of entries) {
       if (budget.count >= NOTES_TREE_MAX_ITEMS) break;
       if (entry.name.startsWith('.')) continue;
       if (!entry.isDirectory() && !isNotesTreeFilePath(entry.name)) continue;
-      const child = await buildNotesTreeNode(path.join(entryPath, entry.name), rootPath, depth + 1, budget);
-      if (child) node.children.push(child);
+      const child = await buildNotesTreeNode(path.join(entryPath, entry.name), rootPath, depth + 1, budget, sortPreference);
+      if (child) childNodes.push(child);
     }
+
+    const folders = childNodes
+      .filter((child) => child.type === 'folder')
+      .sort((left, right) => compareNotesTreeNodes(left, right, sortPreference.folders));
+    const files = childNodes
+      .filter((child) => child.type === 'file')
+      .sort((left, right) => compareNotesTreeNodes(left, right, sortPreference.files));
+    node.children = [...folders, ...files];
     return node;
   }
 
@@ -430,7 +511,9 @@ async function buildNotesTreeNode(entryPath, rootPath, depth, budget) {
     type: 'file',
     name,
     path: entryPath,
-    relativePath: path.relative(rootPath, entryPath)
+    relativePath: path.relative(rootPath, entryPath),
+    createdMs: stats.birthtimeMs,
+    modifiedMs: stats.mtimeMs
   };
 }
 
@@ -837,6 +920,13 @@ function buildAppMenu() {
         },
         { type: 'separator' },
         {
+          id: 'templates-enabled',
+          label: 'Enable Templates',
+          type: 'checkbox',
+          checked: false,
+          click: (item) => sendMenuAction('set-templates-enabled', { enabled: item.checked })
+        },
+        {
           label: 'Set Default Template...',
           click: () => sendMenuAction('file-set-default-template')
         },
@@ -864,6 +954,16 @@ function buildAppMenu() {
           accelerator: 'CmdOrCtrl+Shift+S',
           click: () => sendMenuAction('file-save-as')
         },
+        { type: 'separator' },
+        {
+          label: 'Set Default Save Folder...',
+          click: () => sendMenuAction('file-set-default-save-folder')
+        },
+        {
+          label: 'Reset Default Save Folder',
+          click: () => sendMenuAction('file-reset-default-save-folder')
+        },
+        { type: 'separator' },
         {
           label: 'Export Mindmap...',
           click: () => sendMenuAction('export-mindmap-svg')
@@ -1004,6 +1104,14 @@ function buildAppMenu() {
                 { label: 'Reset Zoom', click: () => sendMenuAction('zoom-mindmap-reset') },
                 { label: 'Fit to View', click: () => sendMenuAction('zoom-mindmap-fit') }
               ]
+            },
+            {
+              label: 'Notes Tree',
+              submenu: [
+                { label: 'Zoom In', click: () => sendMenuAction('zoom-notes-tree-in') },
+                { label: 'Zoom Out', click: () => sendMenuAction('zoom-notes-tree-out') },
+                { label: 'Reset Zoom', click: () => sendMenuAction('zoom-notes-tree-reset') }
+              ]
             }
           ]
         },
@@ -1035,6 +1143,13 @@ function buildAppMenu() {
           type: 'checkbox',
           checked: true,
           click: (item) => sendMenuAction('set-continue-prefixes', { enabled: item.checked })
+        },
+        {
+          id: 'collapsible-text',
+          label: 'Enable Collapsable Text',
+          type: 'checkbox',
+          checked: false,
+          click: (item) => sendMenuAction('set-collapsible-text', { enabled: item.checked })
         },
         { type: 'separator' },
         {
@@ -1077,6 +1192,13 @@ function buildAppMenu() {
           label: 'Notes Tree Right',
           type: 'radio',
           click: () => sendMenuAction('set-notes-tree-position', { position: 'right' })
+        },
+        {
+          id: 'notes-tree-rainbow',
+          label: 'Rainbow Coloured Folders',
+          type: 'checkbox',
+          checked: false,
+          click: (item) => sendMenuAction('set-notes-tree-rainbow', { enabled: item.checked })
         },
         {
           label: 'Choose Notes Folder...',
@@ -1127,6 +1249,14 @@ function buildAppMenu() {
         {
           label: 'Templates',
           submenu: [
+            {
+              id: 'templates-enabled-tools',
+              label: 'Enable Templates',
+              type: 'checkbox',
+              checked: false,
+              click: (item) => sendMenuAction('set-templates-enabled', { enabled: item.checked })
+            },
+            { type: 'separator' },
             { label: 'New from Template...', click: () => sendMenuAction('file-new-from-template') },
             { label: 'Set Default Template...', click: () => sendMenuAction('file-set-default-template') },
             { label: 'Reset Default Template', click: () => sendMenuAction('file-reset-default-template') }
@@ -1643,6 +1773,7 @@ function createWindow(initialSessionState = null, initialOpenPath = null) {
     }
   });
   window.__isMermaidWorker = false;
+  window.__currentFilePath = null;
 
   let saveBoundsTimer = null;
   const saveCurrentWindowBounds = (options = {}) => {
@@ -1760,6 +1891,15 @@ function createWindow(initialSessionState = null, initialOpenPath = null) {
       );
     } else if (params.selectionText) {
       template.push({ role: 'copy', enabled: params.editFlags.canCopy });
+    }
+
+    if (!window.__isMermaidWorker) {
+      if (template.length > 0) template.push({ type: 'separator' });
+      template.push({
+        label: 'Move File...',
+        enabled: Boolean(window.__currentFilePath),
+        click: () => sendMenuAction('file-move-current')
+      });
     }
 
     if (template.length === 0) return;
@@ -2106,6 +2246,9 @@ ipcMain.handle('choose-template-file', async () => {
 ipcMain.handle('save-default-template-preference', async (_event, payload) => {
   const templatePath = payload?.path || null;
   const settings = await readSettings();
+  const stored = settings.templates && typeof settings.templates === 'object' ? settings.templates : {};
+  const enabled = typeof payload?.enabled === 'boolean' ? payload.enabled : stored.enabled === true;
+  settings.templates = { ...stored, enabled, defaultTemplatePath: templatePath };
   settings.defaultTemplatePath = templatePath;
   await writeSettings(settings);
   return { saved: true };
@@ -2240,6 +2383,21 @@ ipcMain.handle('load-continue-prefixes-preference', async () => {
   return { loaded: true, enabled: settings.continuePrefixes };
 });
 
+ipcMain.handle('save-collapsible-text-preference', async (_event, payload) => {
+  const settings = await readSettings();
+  settings.collapsibleText = payload?.enabled === true;
+  await writeSettings(settings);
+  return { saved: true };
+});
+
+ipcMain.handle('load-collapsible-text-preference', async () => {
+  const settings = await readSettings();
+  if (typeof settings.collapsibleText !== 'boolean') {
+    return { loaded: false, enabled: false };
+  }
+  return { loaded: true, enabled: settings.collapsibleText };
+});
+
 ipcMain.handle('save-mermaid-preview-preference', async (_event, payload) => {
   const settings = await readSettings();
   settings.mermaidPreviewEnabled = payload?.enabled === true;
@@ -2367,8 +2525,15 @@ ipcMain.handle('read-notes-tree', async (_event, payload) => {
       return { loaded: false, error: 'Notes folder is not a directory.', tree: null };
     }
     const budget = { count: 0 };
-    const tree = await buildNotesTreeNode(resolvedRoot, resolvedRoot, 0, budget);
-    return { loaded: true, rootPath: resolvedRoot, tree, truncated: budget.count >= NOTES_TREE_MAX_ITEMS };
+    const sortPreference = normalizeNotesTreeSortPreference(payload?.sort);
+    const tree = await buildNotesTreeNode(resolvedRoot, resolvedRoot, 0, budget, sortPreference);
+    return {
+      loaded: true,
+      rootPath: resolvedRoot,
+      tree,
+      truncated: budget.count >= NOTES_TREE_MAX_ITEMS,
+      itemLimit: NOTES_TREE_MAX_ITEMS
+    };
   } catch (error) {
     return { loaded: false, error: String(error?.message || error || 'Unable to read notes folder.'), tree: null };
   }
@@ -2381,6 +2546,11 @@ ipcMain.handle('save-notes-tree-preference', async (_event, payload) => {
   const position = payload?.position === 'left' ? 'left' : 'right';
   const rootPath = typeof payload?.rootPath === 'string' && payload.rootPath.trim() ? payload.rootPath : null;
   const folderEmojis = payload?.folderEmojis && typeof payload.folderEmojis === 'object' ? payload.folderEmojis : {};
+  const sort = normalizeNotesTreeSortPreference(payload?.sort || stored.sort);
+  const rainbowFolders = payload?.rainbowFolders === true;
+  const zoom = Number(payload?.zoom);
+  const storedZoom = Number(stored.zoom);
+  const normalizedZoom = Number.isFinite(zoom) ? Math.max(0.7, Math.min(2.2, zoom)) : storedZoom;
   const width = Number(payload?.width);
   const storedWidth = Number(stored.width);
   const normalizedWidth = Number.isFinite(width) ? Math.max(200, Math.min(520, Math.round(width))) : storedWidth;
@@ -2390,6 +2560,9 @@ ipcMain.handle('save-notes-tree-preference', async (_event, payload) => {
     position,
     rootPath,
     folderEmojis,
+    sort,
+    rainbowFolders,
+    zoom: Number.isFinite(normalizedZoom) ? normalizedZoom : 1,
     width: Number.isFinite(normalizedWidth) ? normalizedWidth : 270
   };
   await writeSettings(settings);
@@ -2400,7 +2573,17 @@ ipcMain.handle('load-notes-tree-preference', async () => {
   const settings = await readSettings();
   const stored = settings.notesTree;
   if (!stored || typeof stored !== 'object') {
-    return { loaded: false, visible: false, position: 'left', rootPath: null, folderEmojis: {} };
+    return {
+      loaded: false,
+      visible: false,
+      position: 'left',
+      rootPath: null,
+      folderEmojis: {},
+      sort: normalizeNotesTreeSortPreference(),
+      rainbowFolders: false,
+      zoom: 1,
+      width: 270
+    };
   }
 
   return {
@@ -2409,6 +2592,9 @@ ipcMain.handle('load-notes-tree-preference', async () => {
     position: stored.position === 'right' ? 'right' : 'left',
     rootPath: typeof stored.rootPath === 'string' ? stored.rootPath : null,
     folderEmojis: stored.folderEmojis && typeof stored.folderEmojis === 'object' ? stored.folderEmojis : {},
+    sort: normalizeNotesTreeSortPreference(stored.sort),
+    rainbowFolders: stored.rainbowFolders === true,
+    zoom: Number.isFinite(Number(stored.zoom)) ? Math.max(0.7, Math.min(2.2, Number(stored.zoom))) : 1,
     width: Number.isFinite(Number(stored.width)) ? Math.max(200, Math.min(520, Math.round(Number(stored.width)))) : 270
   };
 });
@@ -2515,24 +2701,28 @@ ipcMain.handle('read-snapshot', async (_event, payload) => {
 
 ipcMain.handle('load-default-template-preference', async () => {
   const settings = await readSettings();
-  const templatePath = settings.defaultTemplatePath;
+  const templates = settings.templates && typeof settings.templates === 'object' ? settings.templates : {};
+  const enabled = templates.enabled === true;
+  const templatePath = templates.defaultTemplatePath || settings.defaultTemplatePath;
 
   if (!templatePath) {
-    return { loaded: false };
+    return { loaded: false, enabled };
   }
 
   try {
     const content = await fs.readFile(templatePath, 'utf8');
     return {
       loaded: true,
+      enabled,
       path: templatePath,
       name: path.basename(templatePath),
       content
     };
   } catch {
+    settings.templates = { ...templates, defaultTemplatePath: null, enabled };
     settings.defaultTemplatePath = null;
     await writeSettings(settings);
-    return { loaded: false, invalidPath: templatePath };
+    return { loaded: false, enabled, invalidPath: templatePath };
   }
 });
 
@@ -2734,13 +2924,65 @@ ipcMain.handle('file-save', async (_event, payload) => {
   }
 });
 
+ipcMain.handle('choose-default-save-folder', async () => {
+  const result = await dialog.showOpenDialog({
+    title: 'Choose Default Save Folder',
+    properties: ['openDirectory', 'createDirectory']
+  });
+  if (result.canceled || result.filePaths.length === 0) return { saved: false };
+  const settings = await readSettings();
+  settings.defaultSaveFolder = result.filePaths[0];
+  await writeSettings(settings);
+  return { saved: true, path: result.filePaths[0], name: path.basename(result.filePaths[0]) || result.filePaths[0] };
+});
+
+ipcMain.handle('reset-default-save-folder', async () => {
+  const settings = await readSettings();
+  settings.defaultSaveFolder = null;
+  await writeSettings(settings);
+  return { saved: true };
+});
+
+ipcMain.handle('move-file', async (_event, payload) => {
+  const sourcePath = payload?.path;
+  if (!sourcePath) return { moved: false, error: 'No file selected.' };
+  const result = await dialog.showOpenDialog({
+    title: 'Move File To Folder',
+    properties: ['openDirectory', 'createDirectory']
+  });
+  if (result.canceled || result.filePaths.length === 0) return { moved: false };
+  const targetPath = path.join(result.filePaths[0], path.basename(sourcePath));
+  try {
+    if (path.resolve(sourcePath) === path.resolve(targetPath)) return { moved: false };
+    if (await pathExists(targetPath)) {
+      return { moved: false, error: `A file named "${path.basename(targetPath)}" already exists in that folder.` };
+    }
+    await fs.rename(sourcePath, targetPath);
+    return { moved: true, path: targetPath, name: path.basename(targetPath), oldPath: sourcePath };
+  } catch (error) {
+    return { moved: false, error: String(error?.message || error || 'Unable to move file.') };
+  }
+});
+
+ipcMain.handle('duplicate-file', async (_event, payload) => {
+  const sourcePath = payload?.path;
+  if (!sourcePath) return { duplicated: false, error: 'No file selected.' };
+  try {
+    const targetPath = await uniqueCopyPath(sourcePath);
+    await fs.copyFile(sourcePath, targetPath);
+    return { duplicated: true, path: targetPath, name: path.basename(targetPath), sourcePath };
+  } catch (error) {
+    return { duplicated: false, error: String(error?.message || error || 'Unable to duplicate file.') };
+  }
+});
+
 ipcMain.handle('file-save-as', async (_event, payload) => {
   const content = payload?.content ?? '';
   const suggestedPath = payload?.path;
 
   const result = await dialog.showSaveDialog({
     title: 'Save Markdown File',
-    defaultPath: suggestedPath || 'Untitled.md',
+    defaultPath: await resolveSaveDialogDefaultPath(suggestedPath),
     filters: [
       { name: 'Markdown', extensions: ['md'] },
       { name: 'Text', extensions: ['txt'] },
@@ -2847,7 +3089,7 @@ ipcMain.on('file-save-as-sync', (event, payload) => {
 
     const filePath = dialog.showSaveDialogSync({
       title: 'Save Markdown File',
-      defaultPath: suggestedPath || 'Untitled.md',
+      defaultPath: resolveSaveDialogDefaultPathSync(suggestedPath),
       filters: [
         { name: 'Markdown', extensions: ['md'] },
         { name: 'Text', extensions: ['txt'] },
@@ -2925,6 +3167,9 @@ ipcMain.on('update-menu-state', (event, payload) => {
   if (window && typeof payload.mermaidPreviewEnabled === 'boolean') {
     window.__mermaidPreviewEnabled = payload.mermaidPreviewEnabled;
   }
+  if (window) {
+    window.__currentFilePath = typeof payload.currentFilePath === 'string' && payload.currentFilePath ? payload.currentFilePath : null;
+  }
 
   const rawItem = menu.getMenuItemById('toggle-raw');
   const formattedItem = menu.getMenuItemById('toggle-formatted');
@@ -2951,6 +3196,7 @@ ipcMain.on('update-menu-state', (event, payload) => {
   const wordWrapItem = menu.getMenuItemById('word-wrap');
   const lineNumbersItem = menu.getMenuItemById('line-numbers');
   const continuePrefixesItem = menu.getMenuItemById('continue-prefixes');
+  const collapsibleTextItem = menu.getMenuItemById('collapsible-text');
   const mermaidPreviewItem = menu.getMenuItemById('mermaid-preview-experimental');
   const outlineItem = menu.getMenuItemById('toggle-outline');
   const outlineLeftItem = menu.getMenuItemById('outline-left');
@@ -2958,6 +3204,9 @@ ipcMain.on('update-menu-state', (event, payload) => {
   const notesTreeItem = menu.getMenuItemById('toggle-notes-tree');
   const notesTreeLeftItem = menu.getMenuItemById('notes-tree-left');
   const notesTreeRightItem = menu.getMenuItemById('notes-tree-right');
+  const notesTreeRainbowItem = menu.getMenuItemById('notes-tree-rainbow');
+  const templatesEnabledItem = menu.getMenuItemById('templates-enabled');
+  const templatesEnabledToolsItem = menu.getMenuItemById('templates-enabled-tools');
   const exportHtmlDefault = menu.getMenuItemById('export-html-default');
   const exportHtmlArticle = menu.getMenuItemById('export-html-article');
   const exportHtmlCompact = menu.getMenuItemById('export-html-compact');
@@ -3010,6 +3259,7 @@ ipcMain.on('update-menu-state', (event, payload) => {
   if (wordWrapItem && typeof payload.wordWrapEnabled === 'boolean') wordWrapItem.checked = payload.wordWrapEnabled;
   if (lineNumbersItem && typeof payload.lineNumbersEnabled === 'boolean') lineNumbersItem.checked = payload.lineNumbersEnabled;
   if (continuePrefixesItem && typeof payload.continuePrefixesEnabled === 'boolean') continuePrefixesItem.checked = payload.continuePrefixesEnabled;
+  if (collapsibleTextItem && typeof payload.collapsibleTextEnabled === 'boolean') collapsibleTextItem.checked = payload.collapsibleTextEnabled;
   if (mermaidPreviewItem && typeof payload.mermaidPreviewEnabled === 'boolean') mermaidPreviewItem.checked = payload.mermaidPreviewEnabled;
   if (outlineItem && typeof payload.outlineVisible === 'boolean') outlineItem.checked = payload.outlineVisible;
   if (outlineLeftItem && typeof payload.outlineVisible === 'boolean') outlineLeftItem.enabled = payload.outlineVisible;
@@ -3019,8 +3269,12 @@ ipcMain.on('update-menu-state', (event, payload) => {
   if (notesTreeItem && typeof payload.notesTreeVisible === 'boolean') notesTreeItem.checked = payload.notesTreeVisible;
   if (notesTreeLeftItem && typeof payload.notesTreeVisible === 'boolean') notesTreeLeftItem.enabled = payload.notesTreeVisible;
   if (notesTreeRightItem && typeof payload.notesTreeVisible === 'boolean') notesTreeRightItem.enabled = payload.notesTreeVisible;
+  if (notesTreeRainbowItem && typeof payload.notesTreeVisible === 'boolean') notesTreeRainbowItem.enabled = payload.notesTreeVisible;
+  if (notesTreeRainbowItem && typeof payload.notesTreeRainbowFolders === 'boolean') notesTreeRainbowItem.checked = payload.notesTreeRainbowFolders;
   if (notesTreeLeftItem && payload.notesTreePosition === 'left') notesTreeLeftItem.checked = true;
   if (notesTreeRightItem && payload.notesTreePosition === 'right') notesTreeRightItem.checked = true;
+  if (templatesEnabledItem && typeof payload.templatesEnabled === 'boolean') templatesEnabledItem.checked = payload.templatesEnabled;
+  if (templatesEnabledToolsItem && typeof payload.templatesEnabled === 'boolean') templatesEnabledToolsItem.checked = payload.templatesEnabled;
   if (exportHtmlDefault && payload.exportHtmlPreset === 'default') exportHtmlDefault.checked = true;
   if (exportHtmlArticle && payload.exportHtmlPreset === 'article') exportHtmlArticle.checked = true;
   if (exportHtmlCompact && payload.exportHtmlPreset === 'compact') exportHtmlCompact.checked = true;
