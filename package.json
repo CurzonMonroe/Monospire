@@ -1,13 +1,18 @@
 {
   "name": "monospire",
   "productName": "Monospire",
-  "version": "2.2.0",
+  "version": "2.3.0",
   "description": "A focused Markdown editor",
   "main": "main.js",
   "scripts": {
+    "build:codemirror": "node ./scripts/build-codemirror.mjs",
+    "prestart": "npm run build:codemirror",
     "start": "electron .",
     "test": "node tests/mindmap-core.test.js && node tests/mmap-importer.test.js && node tests/renderer-pane-layout.test.js && node tests/renderer-mindmap-view.test.js",
+    "prepack:app": "npm run build:codemirror",
+    "prepack:mac": "npm run build:codemirror",
     "pack:app": "bash ./scripts/package-app.sh",
+    "predist:mac": "npm run build:codemirror",
     "pack:mac": "electron-builder --mac --dir",
     "dist:mac": "electron-builder --mac && npm run brew:cask",
     "dist:linux": "electron-builder --linux AppImage deb rpm tar.xz --x64 --arm64 --publish never",
@@ -28,12 +33,13 @@
   "license": "MIT",
   "devDependencies": {
     "electron": "^35.0.0",
-    "electron-builder": "^26.7.0"
+    "electron-builder": "^26.7.0",
+    "esbuild": "^0.28.0"
   },
   "build": {
     "appId": "com.monospire.app",
     "productName": "Monospire",
-    "buildVersion": "2.2.0.0",
+    "buildVersion": "2.3.0.0",
     "asar": false,
     "files": [
       "main.js",
@@ -49,6 +55,7 @@
       "styles.css",
       "assets/**/*",
       "themes/**/*",
+      "vendor/**/*",
       "scripts/**/*",
       "package.json",
       "node_modules/**/*"
@@ -107,6 +114,13 @@
     ]
   },
   "dependencies": {
+    "@codemirror/autocomplete": "^6.20.3",
+    "@codemirror/commands": "^6.10.3",
+    "@codemirror/lang-markdown": "^6.5.0",
+    "@codemirror/language": "^6.12.3",
+    "@codemirror/search": "^6.7.0",
+    "@codemirror/state": "^6.6.0",
+    "@codemirror/view": "^6.43.0",
     "@mermaid-js/mermaid-cli": "^11.12.0",
     "highlight.js": "^11.11.1",
     "html-to-docx": "^1.8.0",

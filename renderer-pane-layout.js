@@ -69,7 +69,7 @@ function createPaneLayoutController(options) {
           splitter.style.display = 'block';
           splitter.style.order = String(index * 2 + 1);
         }
-        columns.push('3px');
+        columns.push('0px');
       }
     }
 

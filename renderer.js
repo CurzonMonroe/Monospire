@@ -813,7 +813,16 @@ const workspace = document.getElementById('workspace');
 const menuBar = document.getElementById('menu-bar');
 const rawPane = document.getElementById('raw-pane');
 const formattedPane = document.getElementById('formatted-pane');
-const rawEditor = document.getElementById('raw-editor');
+const rawEditorHost = document.getElementById('raw-editor');
+const rawEditor = window.MonospireCodeMirror.createMarkdownEditor(rawEditorHost, {
+  ariaLabel: 'Raw Markdown editor',
+  placeholder: 'Start writing Markdown...',
+  lineNumbers: false,
+  collapsibleText: false,
+  wordWrap: false,
+  spellcheck: true,
+  darkMode: false
+});
 const rawEditorShell = document.getElementById('raw-editor-shell');
 const rawFoldGutter = document.getElementById('raw-fold-gutter');
 const rawFoldList = document.getElementById('raw-fold-list');
@@ -830,9 +839,22 @@ const ribbonThemeModeButtons = [...document.querySelectorAll('[data-theme-mode]'
 const recentFilesMenu = document.getElementById('recent-files-menu');
 const tocPane = document.getElementById('toc-pane');
 const tocList = document.getElementById('toc-list');
+const tagManagerPane = document.getElementById('tag-manager-pane');
+const tagManagerList = document.getElementById('tag-manager-list');
+const tagManagerFilesToggle = document.getElementById('tag-manager-files-toggle');
+const tagOptionsModal = document.getElementById('tag-options-modal');
+const tagOptionsHeader = document.getElementById('tag-options-header');
+const tagOptionsEmojiInput = document.getElementById('tag-options-emoji-input');
+const tagOptionsColorInput = document.getElementById('tag-options-color-input');
+const tagOptionsNetworkInput = document.getElementById('tag-options-network-input');
+const tagNetworkModal = document.getElementById('tag-network-modal');
+const tagNetworkSvg = document.getElementById('tag-network-svg');
+const tagNetworkStatus = document.getElementById('tag-network-status');
 const notesTreePane = document.getElementById('notes-tree-pane');
 const notesTreeRoot = document.getElementById('notes-tree-root');
 const notesTreeList = document.getElementById('notes-tree-list');
+const notesTreeRefreshButton = document.getElementById('notes-tree-refresh-button');
+const notesTreeSortButton = document.getElementById('notes-tree-sort-button');
 const notesTreeResizer = document.getElementById('notes-tree-resizer');
 const notesTreeSortMenu = document.getElementById('notes-tree-sort-menu');
 const notesTreeContextMenu = document.getElementById('notes-tree-context-menu');
@@ -870,6 +892,8 @@ const versionHistoryModal = document.getElementById('version-history-modal');
 const versionHistoryList = document.getElementById('version-history-list');
 const folderEmojiModal = document.getElementById('folder-emoji-modal');
 const folderEmojiInput = document.getElementById('folder-emoji-input');
+const folderColourControls = document.getElementById('folder-colour-controls');
+const folderColourInput = document.getElementById('folder-colour-input');
 const statusLastSaved = document.getElementById('status-last-saved');
 const statusLineCount = document.getElementById('status-line-count');
 const statusWordCount = document.getElementById('status-word-count');
@@ -952,6 +976,18 @@ let continuePrefixesEnabled = true;
 let mermaidPreviewEnabled = false;
 let outlineVisible = true;
 let outlinePosition = 'right';
+let tagManagerVisible = false;
+let tagManagerPosition = 'right';
+let tagManagerShowFiles = false;
+let tagManagerShowCounts = true;
+let tagManagerTagSettings = {};
+let tagManagerZoom = 1;
+let tagManagerData = [];
+let tagManagerError = '';
+let tagManagerLoading = false;
+let tagManagerTruncated = false;
+let tagManagerFilesScanned = 0;
+let tagManagerFileLimit = 0;
 let notesTreeVisible = false;
 let notesTreePosition = 'left';
 let notesTreeRootPath = null;
@@ -961,6 +997,7 @@ let notesTreeTruncated = false;
 let notesTreeItemLimit = 0;
 let notesTreeLoading = false;
 let notesTreeFolderEmojis = {};
+let notesTreeFolderColours = {};
 let notesTreeWidth = 270;
 let notesTreeZoom = 1;
 let notesTreeSort = {
@@ -968,14 +1005,20 @@ let notesTreeSort = {
   files: { field: 'name', direction: 'asc' }
 };
 let notesTreeRainbowFolders = false;
+let notesTreeColourMode = 'plain';
+let notesTreeShowCounts = true;
 let activeFolderEmojiPath = '';
+let activeTagOptionsPath = '';
 let activeNotesTreeContextPath = '';
 const notesTreeExpandedPaths = new Set();
+const tagManagerExpandedPaths = new Set();
 const NOTES_TREE_MIN_WIDTH = 200;
 const NOTES_TREE_DEFAULT_WIDTH = 270;
 const NOTES_TREE_MAX_WIDTH = 520;
 const NOTES_TREE_MIN_ZOOM = 0.7;
 const NOTES_TREE_MAX_ZOOM = 2.2;
+const TAG_MANAGER_MIN_ZOOM = 0.7;
+const TAG_MANAGER_MAX_ZOOM = 2.2;
 const NOTES_TREE_SORT_FIELDS = new Set(['name', 'created', 'modified']);
 const NOTES_TREE_SORT_DIRECTIONS = new Set(['asc', 'desc']);
 const NOTES_TREE_SORT_FIELD_LABELS = {
@@ -1221,7 +1264,7 @@ function countRawEditorLines() {
 }
 
 function getRawEditorLineHeight() {
-  const style = window.getComputedStyle(rawEditor);
+  const style = window.getComputedStyle(rawEditorHost);
   const parsed = Number.parseFloat(style.lineHeight);
   if (Number.isFinite(parsed)) return parsed;
   const fontSize = Number.parseFloat(style.fontSize);
@@ -1234,7 +1277,7 @@ function measureWrappedRawLineHeights(lines) {
     return lines.map(() => lineHeight);
   }
 
-  const style = window.getComputedStyle(rawEditor);
+  const style = window.getComputedStyle(rawEditorHost);
   const paddingLeft = Number.parseFloat(style.paddingLeft) || 0;
   const paddingRight = Number.parseFloat(style.paddingRight) || 0;
   const contentWidth = Math.max(1, rawEditor.clientWidth - paddingLeft - paddingRight);
@@ -1282,7 +1325,7 @@ function getRawLineMetrics({ force = false } = {}) {
     return lastRawLineMetrics;
   }
 
-  const style = window.getComputedStyle(rawEditor);
+  const style = window.getComputedStyle(rawEditorHost);
   const paddingTop = Number.parseFloat(style.paddingTop) || 0;
   const paddingBottom = Number.parseFloat(style.paddingBottom) || 0;
   const heights = measureWrappedRawLineHeights(lines);
@@ -1305,6 +1348,9 @@ function getRawLineMetrics({ force = false } = {}) {
 }
 
 function rawLinePositionFromScrollTop(scrollTop) {
+  if (typeof rawEditor.linePositionFromScrollTop === 'function') {
+    return rawEditor.linePositionFromScrollTop(scrollTop);
+  }
   const metrics = getRawLineMetrics();
   const tops = metrics.tops;
   if (tops.length === 0) return { line: 0, progress: 0 };
@@ -1323,6 +1369,9 @@ function rawLinePositionFromScrollTop(scrollTop) {
 }
 
 function rawScrollTopForLinePosition(line, progress = 0) {
+  if (typeof rawEditor.scrollTopForLinePosition === 'function') {
+    return rawEditor.scrollTopForLinePosition(line, progress);
+  }
   const metrics = getRawLineMetrics();
   const index = Math.max(0, Math.min(metrics.tops.length - 1, Math.floor(line || 0)));
   const start = metrics.tops[index] ?? metrics.paddingTop;
@@ -1333,11 +1382,8 @@ function rawScrollTopForLinePosition(line, progress = 0) {
 }
 
 function updateLineNumberScroll() {
-  if (!rawLineNumberList) return;
-  rawLineNumberList.style.transform = `translateY(-${rawEditor.scrollTop || 0}px)`;
-  if (rawFoldList) {
-    rawFoldList.style.transform = `translateY(-${rawEditor.scrollTop || 0}px)`;
-  }
+  if (rawLineNumberList) rawLineNumberList.style.transform = `translateY(-${rawEditor.scrollTop || 0}px)`;
+  if (rawFoldList) rawFoldList.style.transform = `translateY(-${rawEditor.scrollTop || 0}px)`;
 }
 
 function discoverRawFoldRegions(source = markdownState) {
@@ -1446,7 +1492,7 @@ function toggleRawFold(region) {
 }
 
 function updateLineNumbers({ force = false } = {}) {
-  if (!rawLineNumberList) return;
+  if (!rawLineNumberList || window.MonospireCodeMirror) return;
   const metrics = getRawLineMetrics({ force });
   const lines = metrics.lines;
   const lineCount = countRawEditorLines();
@@ -2004,16 +2050,560 @@ function renderOutlineList() {
   }
 }
 
+function buildTagTree(tags) {
+  const root = { name: '', path: '', count: 0, ownCount: 0, files: [], children: new Map() };
+  const values = Array.isArray(tags) ? tags : [];
+  for (const item of values) {
+    const tag = String(item?.tag || '').replace(/^#/, '').trim();
+    if (!tag) continue;
+    const parts = tag.split('/').map((part) => part.trim()).filter(Boolean);
+    if (parts.length === 0) continue;
+    let node = root;
+    node.count += Number(item.count || 0);
+    let currentPath = '';
+    for (const part of parts) {
+      currentPath = currentPath ? `${currentPath}/${part}` : part;
+      if (!node.children.has(part.toLowerCase())) {
+        node.children.set(part.toLowerCase(), {
+          name: part,
+          path: currentPath,
+          count: 0,
+          ownCount: 0,
+          files: [],
+          children: new Map()
+        });
+      }
+      node = node.children.get(part.toLowerCase());
+      node.count += Number(item.count || 0);
+    }
+    node.ownCount += Number(item.count || 0);
+    node.files = Array.isArray(item.files) ? item.files : [];
+  }
+  return root;
+}
+
+function sortedTagChildren(node) {
+  return [...(node?.children?.values?.() || [])]
+    .sort((left, right) => left.name.localeCompare(right.name, undefined, { sensitivity: 'base', numeric: true }));
+}
+
+function sortedTagFiles(node) {
+  return [...(node?.files || [])]
+    .filter(Boolean)
+    .sort((left, right) => left.localeCompare(right, undefined, { sensitivity: 'base', numeric: true }));
+}
+
+function normalizeTagSetting(value) {
+  const source = value && typeof value === 'object' ? value : {};
+  const emoji = String(source.emoji || '').trim();
+  const color = /^#[0-9a-f]{6}$/i.test(String(source.color || '')) ? String(source.color).toLowerCase() : '';
+  return {
+    emoji: emoji ? ([...emoji][0] || emoji) : '',
+    color,
+    excludeFromNetwork: source.excludeFromNetwork === true
+  };
+}
+
+function normalizeTagSettings(value) {
+  const source = value && typeof value === 'object' ? value : {};
+  const normalized = {};
+  for (const [tagPath, setting] of Object.entries(source)) {
+    const key = String(tagPath || '').trim();
+    if (!key) continue;
+    const next = normalizeTagSetting(setting);
+    if (next.emoji || next.color || next.excludeFromNetwork) normalized[key] = next;
+  }
+  return normalized;
+}
+
+function tagManagerSetting(tagPath) {
+  return normalizeTagSetting(tagManagerTagSettings?.[tagPath]);
+}
+
+function renderTagManagerFile(relativeFilePath, depth = 0) {
+  const row = document.createElement('div');
+  row.className = 'tag-manager-row tag-manager-file-row';
+  row.style.setProperty('--depth', String(depth));
+
+  const spacer = document.createElement('span');
+  spacer.className = 'tag-manager-file-spacer';
+  row.appendChild(spacer);
+
+  const label = document.createElement('button');
+  label.type = 'button';
+  label.className = 'tag-manager-label tag-manager-file-label';
+  label.dataset.action = 'open-tag-manager-file';
+  label.dataset.path = notesTreeRootPath ? path.join(notesTreeRootPath, relativeFilePath) : relativeFilePath;
+  label.title = relativeFilePath;
+  label.textContent = path.basename(relativeFilePath) || relativeFilePath;
+  row.appendChild(label);
+
+  const folder = document.createElement('span');
+  folder.className = 'tag-manager-file-folder';
+  folder.textContent = path.dirname(relativeFilePath) === '.' ? '' : path.dirname(relativeFilePath);
+  row.appendChild(folder);
+
+  return row;
+}
+
+function updateTagManagerFilesToggle() {
+  if (!tagManagerFilesToggle) return;
+  tagManagerFilesToggle.classList.toggle('checked', tagManagerShowFiles);
+  tagManagerFilesToggle.setAttribute('aria-pressed', tagManagerShowFiles ? 'true' : 'false');
+  tagManagerFilesToggle.title = tagManagerShowFiles ? 'Hide files under tags' : 'Show files under tags';
+  tagManagerFilesToggle.setAttribute('aria-label', tagManagerFilesToggle.title);
+}
+
+function renderTagManagerNode(node, depth = 0) {
+  const row = document.createElement('div');
+  row.className = 'tag-manager-row';
+  row.style.setProperty('--depth', String(depth));
+  row.dataset.tag = node.path;
+  const setting = tagManagerSetting(node.path);
+  if (setting.color) {
+    row.classList.add('tag-manager-row-coloured');
+    row.style.setProperty('--tag-manager-tag-color', setting.color);
+  }
+  if (setting.excludeFromNetwork) row.classList.add('excluded-from-network');
+
+  const children = sortedTagChildren(node);
+  const files = tagManagerShowFiles ? sortedTagFiles(node) : [];
+  const expandable = children.length > 0 || files.length > 0;
+  const expanded = expandable && tagManagerExpandedPaths.has(node.path);
+  row.classList.toggle('expanded', expanded);
+
+  const disclosure = document.createElement('button');
+  disclosure.type = 'button';
+  disclosure.className = 'tag-manager-disclosure';
+  disclosure.dataset.action = expandable ? 'toggle-tag-manager-node' : '';
+  disclosure.dataset.tag = node.path;
+  disclosure.disabled = !expandable;
+  disclosure.textContent = expandable ? (expanded ? '⌄' : '›') : '';
+  row.appendChild(disclosure);
+
+  const label = document.createElement('button');
+  label.type = 'button';
+  label.className = 'tag-manager-label';
+  label.dataset.action = expandable ? 'toggle-tag-manager-node' : 'copy-tag-manager-tag';
+  label.dataset.tag = node.path;
+  label.title = `#${node.path}`;
+  label.textContent = `${setting.emoji ? `${setting.emoji} ` : ''}${node.name}`;
+  row.appendChild(label);
+
+  if (tagManagerShowCounts) {
+    const count = document.createElement('span');
+    count.className = 'tag-manager-count-pill';
+    count.textContent = String(node.count || 0);
+    row.appendChild(count);
+  }
+
+  const options = document.createElement('button');
+  options.type = 'button';
+  options.className = 'tag-manager-options-button';
+  options.dataset.action = 'open-tag-options';
+  options.dataset.tag = node.path;
+  options.title = `Tag options for #${node.path}`;
+  options.setAttribute('aria-label', `Tag options for #${node.path}`);
+  options.textContent = setting.emoji || '+';
+  row.appendChild(options);
+
+  const fragment = document.createDocumentFragment();
+  fragment.appendChild(row);
+  if (expanded) {
+    for (const child of children) {
+      fragment.appendChild(renderTagManagerNode(child, depth + 1));
+    }
+    for (const file of files) {
+      fragment.appendChild(renderTagManagerFile(file, depth + 1));
+    }
+  }
+  return fragment;
+}
+
+function renderTagManager() {
+  if (!tagManagerList) return;
+  updateTagManagerFilesToggle();
+  tagManagerList.innerHTML = '';
+
+  if (tagManagerLoading) {
+    const empty = document.createElement('div');
+    empty.className = 'tag-manager-empty';
+    empty.textContent = 'Loading tags...';
+    tagManagerList.appendChild(empty);
+    return;
+  }
+
+  if (!notesTreeRootPath) {
+    const empty = document.createElement('div');
+    empty.className = 'tag-manager-empty';
+    empty.textContent = 'Choose a notes folder to build the global tag list.';
+    tagManagerList.appendChild(empty);
+    return;
+  }
+
+  if (tagManagerError) {
+    const empty = document.createElement('div');
+    empty.className = 'tag-manager-empty';
+    empty.textContent = tagManagerError;
+    tagManagerList.appendChild(empty);
+    return;
+  }
+
+  const tree = buildTagTree(tagManagerData);
+  const children = sortedTagChildren(tree);
+  if (children.length === 0) {
+    const empty = document.createElement('div');
+    empty.className = 'tag-manager-empty';
+    empty.textContent = 'No tags found';
+    tagManagerList.appendChild(empty);
+    return;
+  }
+
+  for (const child of children) {
+    tagManagerList.appendChild(renderTagManagerNode(child, 0));
+  }
+
+  if (tagManagerTruncated) {
+    const truncated = document.createElement('div');
+    truncated.className = 'tag-manager-empty';
+    truncated.textContent = tagManagerFileLimit > 0
+      ? `Tags were scanned from the first ${tagManagerFileLimit.toLocaleString()} files.`
+      : 'Only part of the tag list is shown.';
+    tagManagerList.appendChild(truncated);
+  } else if (tagManagerFilesScanned > 0) {
+    const summary = document.createElement('div');
+    summary.className = 'tag-manager-empty tag-manager-summary';
+    summary.textContent = `${tagManagerData.length.toLocaleString()} tag${tagManagerData.length === 1 ? '' : 's'} across ${tagManagerFilesScanned.toLocaleString()} file${tagManagerFilesScanned === 1 ? '' : 's'}.`;
+    tagManagerList.appendChild(summary);
+  }
+}
+
+function closestTagNetworkSetting(tagPath) {
+  const parts = String(tagPath || '').split('/').filter(Boolean);
+  for (let length = parts.length; length > 0; length -= 1) {
+    const candidate = parts.slice(0, length).join('/');
+    const setting = tagManagerSetting(candidate);
+    if (setting.color || setting.excludeFromNetwork) return setting;
+  }
+  return normalizeTagSetting();
+}
+
+function isTagExcludedFromNetwork(tagPath) {
+  const parts = String(tagPath || '').split('/').filter(Boolean);
+  for (let length = parts.length; length > 0; length -= 1) {
+    const candidate = parts.slice(0, length).join('/');
+    if (tagManagerSetting(candidate).excludeFromNetwork) return true;
+  }
+  return false;
+}
+
+function tagNetworkNodeLabel(node) {
+  if (!node) return '';
+  if (node.type === 'file') return path.basename(node.path || node.id.replace(/^file:/, ''));
+  return node.label || node.id.replace(/^tag:/, '');
+}
+
+function buildTagNetworkGraph() {
+  const tagItems = Array.isArray(tagManagerData) ? tagManagerData : [];
+
+  const selectedTags = tagItems
+    .filter((item) => !isTagExcludedFromNetwork(String(item.tag || '')))
+    .sort((left, right) => Number(right.count || 0) - Number(left.count || 0))
+    .slice(0, 160);
+
+  const nodes = new Map();
+  const links = [];
+  const linkedFiles = new Set();
+
+  for (const item of selectedTags) {
+    const tag = String(item.tag || '').replace(/^#/, '').trim();
+    if (!tag) continue;
+    const setting = closestTagNetworkSetting(tag);
+    const directSetting = tagManagerSetting(tag);
+    const tagId = `tag:${tag}`;
+    nodes.set(tagId, {
+      id: tagId,
+      type: 'tag',
+      tag,
+      label: `${directSetting.emoji ? `${directSetting.emoji} ` : ''}${tag.split('/').slice(-1)[0]}`,
+      fullLabel: `#${tag}`,
+      count: Number(item.count || 0),
+      color: setting.color || '#9fbf6b',
+      excluded: directSetting.excludeFromNetwork
+    });
+
+    for (const filePath of (item.files || [])) {
+      if (linkedFiles.size >= 520 && !linkedFiles.has(filePath)) continue;
+      linkedFiles.add(filePath);
+      const fileId = `file:${filePath}`;
+      if (!nodes.has(fileId)) {
+        nodes.set(fileId, {
+          id: fileId,
+          type: 'file',
+          path: filePath,
+          label: path.basename(filePath),
+          fullLabel: filePath,
+          count: 1,
+          color: '#9aa0a6'
+        });
+      }
+      links.push({ source: tagId, target: fileId });
+    }
+  }
+
+  const degree = new Map();
+  for (const link of links) {
+    degree.set(link.source, (degree.get(link.source) || 0) + 1);
+    degree.set(link.target, (degree.get(link.target) || 0) + 1);
+  }
+  for (const node of nodes.values()) {
+    node.degree = degree.get(node.id) || 0;
+  }
+  return { nodes: [...nodes.values()].filter((node) => node.degree > 0), links };
+}
+
+function renderTagNetworkGraph() {
+  if (!tagNetworkSvg || !tagNetworkStatus) return;
+  tagNetworkSvg.textContent = '';
+  const graph = buildTagNetworkGraph();
+  const width = 1180;
+  const height = 760;
+  const cx = width / 2;
+  const cy = height / 2;
+  tagNetworkSvg.setAttribute('viewBox', `0 0 ${width} ${height}`);
+
+  if (graph.nodes.length === 0) {
+    tagNetworkStatus.textContent = notesTreeRootPath
+      ? 'No tags available for the network yet.'
+      : 'Choose a notes folder first.';
+    const empty = document.createElementNS('http://www.w3.org/2000/svg', 'text');
+    empty.setAttribute('x', String(cx));
+    empty.setAttribute('y', String(cy));
+    empty.setAttribute('text-anchor', 'middle');
+    empty.setAttribute('class', 'tag-network-empty-text');
+    empty.textContent = 'No tag network to display';
+    tagNetworkSvg.appendChild(empty);
+    return;
+  }
+
+  const tagNodes = graph.nodes.filter((node) => node.type === 'tag');
+  const fileNodesByTag = new Map();
+  for (const link of graph.links) {
+    if (!fileNodesByTag.has(link.source)) fileNodesByTag.set(link.source, []);
+    fileNodesByTag.get(link.source).push(link.target);
+  }
+  const tagRing = Math.min(width, height) * 0.28;
+  tagNodes
+    .sort((left, right) => right.degree - left.degree)
+    .forEach((node, index) => {
+      const angle = (Math.PI * 2 * index) / Math.max(1, tagNodes.length) - Math.PI / 2;
+      node.x = cx + Math.cos(angle) * tagRing;
+      node.y = cy + Math.sin(angle) * tagRing;
+      node.radius = Math.max(8, Math.min(30, 7 + Math.sqrt(node.degree) * 2.15));
+    });
+
+  const nodeById = new Map(graph.nodes.map((node) => [node.id, node]));
+  for (const tagNode of tagNodes) {
+    const files = (fileNodesByTag.get(tagNode.id) || []).map((id) => nodeById.get(id)).filter(Boolean);
+    files.forEach((node, index) => {
+      const angle = (Math.PI * 2 * index) / Math.max(1, files.length) + (tagNode.x + tagNode.y) * 0.001;
+      const radius = 44 + Math.sqrt(files.length) * 8 + (index % 7) * 5;
+      if (Number.isFinite(node.x)) {
+        node.x = (node.x + tagNode.x + Math.cos(angle) * radius) / 2;
+        node.y = (node.y + tagNode.y + Math.sin(angle) * radius) / 2;
+      } else {
+        node.x = tagNode.x + Math.cos(angle) * radius;
+        node.y = tagNode.y + Math.sin(angle) * radius;
+      }
+      node.radius = 3.2;
+    });
+  }
+
+  const adjacency = new Map();
+  for (const link of graph.links) {
+    if (!adjacency.has(link.source)) adjacency.set(link.source, new Set());
+    if (!adjacency.has(link.target)) adjacency.set(link.target, new Set());
+    adjacency.get(link.source).add(link.target);
+    adjacency.get(link.target).add(link.source);
+  }
+
+  const linkLayer = document.createElementNS('http://www.w3.org/2000/svg', 'g');
+  const nodeLayer = document.createElementNS('http://www.w3.org/2000/svg', 'g');
+  const labelLayer = document.createElementNS('http://www.w3.org/2000/svg', 'g');
+  tagNetworkSvg.append(linkLayer, nodeLayer, labelLayer);
+
+  const linkElements = [];
+  for (const link of graph.links) {
+    const source = nodeById.get(link.source);
+    const target = nodeById.get(link.target);
+    if (!source || !target) continue;
+    const line = document.createElementNS('http://www.w3.org/2000/svg', 'line');
+    line.setAttribute('x1', source.x.toFixed(2));
+    line.setAttribute('y1', source.y.toFixed(2));
+    line.setAttribute('x2', target.x.toFixed(2));
+    line.setAttribute('y2', target.y.toFixed(2));
+    line.setAttribute('class', 'tag-network-link');
+    line.dataset.source = source.id;
+    line.dataset.target = target.id;
+    linkLayer.appendChild(line);
+    linkElements.push(line);
+  }
+
+  const nodeElements = [];
+  for (const node of graph.nodes) {
+    if (!Number.isFinite(node.x) || !Number.isFinite(node.y)) continue;
+    const circle = document.createElementNS('http://www.w3.org/2000/svg', 'circle');
+    circle.setAttribute('cx', node.x.toFixed(2));
+    circle.setAttribute('cy', node.y.toFixed(2));
+    circle.setAttribute('r', String(node.radius || 4));
+    circle.setAttribute('class', `tag-network-node tag-network-${node.type}`);
+    circle.style.setProperty('--node-color', node.color);
+    circle.dataset.nodeId = node.id;
+    circle.tabIndex = 0;
+    nodeLayer.appendChild(circle);
+    nodeElements.push(circle);
+  }
+
+  const label = document.createElementNS('http://www.w3.org/2000/svg', 'text');
+  label.setAttribute('class', 'tag-network-hover-label');
+  label.setAttribute('text-anchor', 'middle');
+  labelLayer.appendChild(label);
+
+  const clearHover = () => {
+    tagNetworkSvg.classList.remove('has-hover');
+    label.textContent = '';
+    for (const element of nodeElements) element.classList.remove('active', 'connected', 'dimmed');
+    for (const element of linkElements) element.classList.remove('active', 'dimmed');
+  };
+  const applyHover = (nodeId) => {
+    const node = nodeById.get(nodeId);
+    if (!node) return;
+    const connected = adjacency.get(nodeId) || new Set();
+    tagNetworkSvg.classList.add('has-hover');
+    label.textContent = tagNetworkNodeLabel(node);
+    label.setAttribute('x', String(node.x));
+    label.setAttribute('y', String(Math.max(24, node.y - (node.radius || 4) - 12)));
+    for (const element of nodeElements) {
+      const id = element.dataset.nodeId;
+      element.classList.toggle('active', id === nodeId);
+      element.classList.toggle('connected', connected.has(id));
+      element.classList.toggle('dimmed', id !== nodeId && !connected.has(id));
+    }
+    for (const element of linkElements) {
+      const active = element.dataset.source === nodeId || element.dataset.target === nodeId;
+      element.classList.toggle('active', active);
+      element.classList.toggle('dimmed', !active);
+    }
+  };
+
+  for (const element of nodeElements) {
+    element.addEventListener('mouseenter', () => applyHover(element.dataset.nodeId));
+    element.addEventListener('focus', () => applyHover(element.dataset.nodeId));
+  }
+  tagNetworkSvg.addEventListener('mouseleave', clearHover);
+
+  const fileNodeCount = graph.nodes.filter((node) => node.type === 'file').length;
+  tagNetworkStatus.textContent = `${tagNodes.length.toLocaleString()} tag node${tagNodes.length === 1 ? '' : 's'}, ${fileNodeCount.toLocaleString()} note node${fileNodeCount === 1 ? '' : 's'}.`;
+}
+
+async function openTagNetworkModal() {
+  if (!tagNetworkModal) return;
+  tagNetworkModal.classList.remove('hidden');
+  if (tagManagerData.length === 0 && notesTreeRootPath) {
+    await refreshTagManager();
+  }
+  renderTagNetworkGraph();
+}
+
+function closeTagNetworkModal() {
+  tagNetworkModal?.classList.add('hidden');
+}
+
 function updateSidePaneLayoutClasses() {
   if (!workspace) return;
   workspace.classList.toggle('with-outline', outlineVisible);
+  workspace.classList.toggle('with-tag-manager', tagManagerVisible);
   workspace.classList.toggle('with-notes-tree', notesTreeVisible);
   workspace.classList.toggle('outline-left', outlineVisible && outlinePosition === 'left');
   workspace.classList.toggle('outline-right', outlineVisible && outlinePosition === 'right');
+  workspace.classList.toggle('tag-manager-left', tagManagerVisible && tagManagerPosition === 'left');
+  workspace.classList.toggle('tag-manager-right', tagManagerVisible && tagManagerPosition === 'right');
   workspace.classList.toggle('notes-tree-left', notesTreeVisible && notesTreePosition === 'left');
   workspace.classList.toggle('notes-tree-right', notesTreeVisible && notesTreePosition === 'right');
   applyNotesTreeWidth();
+  applySidePaneStackLayout();
   updatePaneHeaderPositionClasses();
+}
+
+function sidePaneWidthForKey(key) {
+  if (key === 'notesTree') return notesTreeWidth;
+  return 270;
+}
+
+function sidePaneElementForKey(key) {
+  if (key === 'notesTree') return notesTreePane;
+  if (key === 'tagManager') return tagManagerPane;
+  if (key === 'outline') return tocPane;
+  return null;
+}
+
+function applySidePaneStackLayout() {
+  if (!workspace) return;
+  const leftPanes = [];
+  const rightPanes = [];
+  if (notesTreeVisible && notesTreePosition === 'left') leftPanes.push('notesTree');
+  if (tagManagerVisible && tagManagerPosition === 'left') leftPanes.push('tagManager');
+  if (outlineVisible && outlinePosition === 'left') leftPanes.push('outline');
+  if (outlineVisible && outlinePosition === 'right') rightPanes.push('outline');
+  if (tagManagerVisible && tagManagerPosition === 'right') rightPanes.push('tagManager');
+  if (notesTreeVisible && notesTreePosition === 'right') rightPanes.push('notesTree');
+
+  let leftOffset = 0;
+  for (const key of leftPanes) {
+    const pane = sidePaneElementForKey(key);
+    const width = sidePaneWidthForKey(key);
+    if (pane) {
+      pane.style.left = `${leftOffset}px`;
+      pane.style.right = 'auto';
+    }
+    if (key === 'notesTree') {
+      if (notesTreeResizer) {
+        notesTreeResizer.style.left = 'auto';
+        notesTreeResizer.style.right = '-4px';
+      }
+    }
+    leftOffset += width;
+  }
+
+  let rightOffset = 0;
+  for (const key of rightPanes) {
+    const pane = sidePaneElementForKey(key);
+    const width = sidePaneWidthForKey(key);
+    if (pane) {
+      pane.style.right = `${rightOffset}px`;
+      pane.style.left = 'auto';
+    }
+    if (key === 'notesTree') {
+      if (notesTreeResizer) {
+        notesTreeResizer.style.right = 'auto';
+        notesTreeResizer.style.left = '-4px';
+      }
+    }
+    rightOffset += width;
+  }
+
+  for (const key of ['notesTree', 'tagManager', 'outline']) {
+    if (!leftPanes.includes(key) && !rightPanes.includes(key)) {
+      const pane = sidePaneElementForKey(key);
+      if (pane) {
+        pane.style.removeProperty('left');
+        pane.style.removeProperty('right');
+      }
+    }
+  }
+
+  workspace.style.paddingLeft = `${leftOffset}px`;
+  workspace.style.paddingRight = `${rightOffset}px`;
 }
 
 function clampNotesTreeWidth(value) {
@@ -2052,8 +2642,26 @@ function setNotesTreeZoom(value, options = {}) {
   if (options.persist !== false) saveNotesTreePreference();
 }
 
+function clampTagManagerZoom(value) {
+  const numeric = Number(value);
+  if (!Number.isFinite(numeric)) return 1;
+  return Math.max(TAG_MANAGER_MIN_ZOOM, Math.min(TAG_MANAGER_MAX_ZOOM, Math.round(numeric * 100) / 100));
+}
+
+function applyTagManagerZoom() {
+  tagManagerZoom = clampTagManagerZoom(tagManagerZoom);
+  if (tagManagerPane) tagManagerPane.style.setProperty('--tag-manager-zoom', String(tagManagerZoom));
+}
+
+function setTagManagerZoom(value, options = {}) {
+  tagManagerZoom = clampTagManagerZoom(value);
+  applyTagManagerZoom();
+  if (options.persist !== false) saveTagManagerPreference();
+}
+
 function headerElementForPaneKey(key) {
   if (key === 'notesTree') return notesTreePane?.querySelector('.pane-header-notes-tree') || null;
+  if (key === 'tagManager') return tagManagerPane?.querySelector('.pane-header-tag-manager') || null;
   if (key === 'outline') return tocPane?.querySelector('.pane-header-outline') || null;
   if (key === 'raw') return rawPane?.querySelector('.pane-header-markdown') || null;
   if (key === 'formatted') return formattedPane?.querySelector('.pane-header-preview') || null;
@@ -2065,14 +2673,16 @@ function updatePaneHeaderPositionClasses() {
   const paneOrder = [];
 
   if (notesTreeVisible && notesTreePosition === 'left') paneOrder.push('notesTree');
+  if (tagManagerVisible && tagManagerPosition === 'left') paneOrder.push('tagManager');
   if (outlineVisible && outlinePosition === 'left') paneOrder.push('outline');
   if (showRaw) paneOrder.push('raw');
   if (showFormatted) paneOrder.push('formatted');
   if (showMindmap) paneOrder.push('mindmap');
   if (outlineVisible && outlinePosition === 'right') paneOrder.push('outline');
+  if (tagManagerVisible && tagManagerPosition === 'right') paneOrder.push('tagManager');
   if (notesTreeVisible && notesTreePosition === 'right') paneOrder.push('notesTree');
 
-  for (const key of ['notesTree', 'outline', 'raw', 'formatted', 'mindmap']) {
+  for (const key of ['notesTree', 'tagManager', 'outline', 'raw', 'formatted', 'mindmap']) {
     const header = headerElementForPaneKey(key);
     if (!header) continue;
     header.classList.remove(...paneHeaderPositionClassNames);
@@ -2085,6 +2695,29 @@ function updatePaneHeaderPositionClasses() {
 
 function notesTreeFolderEmoji(folderPath) {
   return notesTreeFolderEmojis?.[folderPath] || '';
+}
+
+function normalizeHexColour(value) {
+  return /^#[0-9a-f]{6}$/i.test(String(value || '')) ? String(value).toLowerCase() : '';
+}
+
+function normalizeFolderColours(value) {
+  const source = value && typeof value === 'object' ? value : {};
+  const normalized = {};
+  for (const [folderPath, colour] of Object.entries(source)) {
+    const key = String(folderPath || '');
+    const next = normalizeHexColour(colour);
+    if (key && next) normalized[key] = next;
+  }
+  return normalized;
+}
+
+function notesTreeFolderColour(folderPath) {
+  return normalizeHexColour(notesTreeFolderColours?.[folderPath]);
+}
+
+function isTopLevelNotesTreeFolder(folderPath) {
+  return Boolean(notesTreeRootPath && folderPath && path.dirname(folderPath) === notesTreeRootPath);
 }
 
 function normalizeNotesTreeSortPreference(value) {
@@ -2218,6 +2851,12 @@ function openFolderEmojiEditor(folderPath) {
   if (!folderEmojiModal || !folderEmojiInput || !folderPath) return;
   activeFolderEmojiPath = folderPath;
   folderEmojiInput.value = notesTreeFolderEmoji(folderPath);
+  const isTopLevel = isTopLevelNotesTreeFolder(folderPath);
+  if (folderColourControls) folderColourControls.classList.toggle('hidden', !isTopLevel);
+  if (folderColourInput) {
+    folderColourInput.value = notesTreeFolderColour(folderPath) || '#4da1ff';
+    delete folderColourInput.dataset.cleared;
+  }
   folderEmojiModal.classList.remove('hidden');
   window.setTimeout(() => {
     folderEmojiInput.focus();
@@ -2239,9 +2878,82 @@ function saveFolderEmojiFromEditor(options = {}) {
   } else {
     delete notesTreeFolderEmojis[activeFolderEmojiPath];
   }
+  if (isTopLevelNotesTreeFolder(activeFolderEmojiPath)) {
+    const colour = options.clear
+      || options.clearColour
+      || folderColourInput?.dataset.cleared === 'true'
+      ? ''
+      : normalizeHexColour(folderColourInput?.value);
+    if (colour) {
+      notesTreeFolderColours[activeFolderEmojiPath] = colour;
+    } else {
+      delete notesTreeFolderColours[activeFolderEmojiPath];
+    }
+    notesTreeFolderColours = normalizeFolderColours(notesTreeFolderColours);
+  }
   saveNotesTreePreference();
   renderNotesTree();
   closeFolderEmojiEditor();
+}
+
+function clearFolderColour() {
+  if (!folderColourInput) return;
+  folderColourInput.value = '#4da1ff';
+  folderColourInput.dataset.cleared = 'true';
+}
+
+function openTagOptionsEditor(tagPath) {
+  if (!tagOptionsModal || !tagPath) return;
+  activeTagOptionsPath = tagPath;
+  const setting = tagManagerSetting(tagPath);
+  if (tagOptionsHeader) tagOptionsHeader.textContent = `#${tagPath}`;
+  if (tagOptionsEmojiInput) tagOptionsEmojiInput.value = setting.emoji;
+  if (tagOptionsColorInput) {
+    tagOptionsColorInput.value = setting.color || '#4da1ff';
+    delete tagOptionsColorInput.dataset.cleared;
+  }
+  if (tagOptionsNetworkInput) tagOptionsNetworkInput.checked = setting.excludeFromNetwork;
+  tagOptionsModal.classList.remove('hidden');
+  window.setTimeout(() => {
+    tagOptionsEmojiInput?.focus();
+    tagOptionsEmojiInput?.select();
+  }, 0);
+}
+
+function closeTagOptionsEditor() {
+  tagOptionsModal?.classList.add('hidden');
+  activeTagOptionsPath = '';
+}
+
+function saveTagOptionsFromEditor(options = {}) {
+  if (!activeTagOptionsPath) return;
+  if (options.clear) {
+    delete tagManagerTagSettings[activeTagOptionsPath];
+  } else {
+    const emojiValue = String(tagOptionsEmojiInput?.value || '').trim();
+    const colorValue = options.clearColor || tagOptionsColorInput?.dataset.cleared === 'true'
+      ? ''
+      : String(tagOptionsColorInput?.value || '').trim();
+    const next = normalizeTagSetting({
+      emoji: emojiValue ? ([...emojiValue][0] || emojiValue) : '',
+      color: colorValue,
+      excludeFromNetwork: tagOptionsNetworkInput?.checked === true
+    });
+    if (next.emoji || next.color || next.excludeFromNetwork) {
+      tagManagerTagSettings[activeTagOptionsPath] = next;
+    } else {
+      delete tagManagerTagSettings[activeTagOptionsPath];
+    }
+  }
+  tagManagerTagSettings = normalizeTagSettings(tagManagerTagSettings);
+  saveTagManagerPreference();
+  renderTagManager();
+  closeTagOptionsEditor();
+}
+
+function clearTagOptionsColour() {
+  if (tagOptionsColorInput) tagOptionsColorInput.value = '#4da1ff';
+  if (tagOptionsColorInput) tagOptionsColorInput.dataset.cleared = 'true';
 }
 
 function beginNotesTreeResize(event) {
@@ -2274,36 +2986,28 @@ function renderNotesTreeRoot() {
   if (!notesTreeRoot) return;
   notesTreeRoot.innerHTML = '';
 
+  if (notesTreeRefreshButton) notesTreeRefreshButton.disabled = !notesTreeRootPath;
+  if (notesTreeSortButton) {
+    notesTreeSortButton.disabled = !notesTreeRootPath;
+    notesTreeSortButton.title = notesTreeSortSummary();
+  }
+
   const selectButton = document.createElement('button');
   selectButton.type = 'button';
   selectButton.className = 'notes-tree-root-button';
   selectButton.dataset.action = 'choose-notes-tree-root';
   selectButton.textContent = notesTreeRootPath ? path.basename(notesTreeRootPath) || notesTreeRootPath : 'Choose notes folder';
   notesTreeRoot.appendChild(selectButton);
-
-  if (notesTreeRootPath) {
-    const refreshButton = document.createElement('button');
-    refreshButton.type = 'button';
-    refreshButton.className = 'notes-tree-refresh-button';
-    refreshButton.dataset.action = 'refresh-notes-tree';
-    refreshButton.title = 'Refresh notes tree';
-    refreshButton.setAttribute('aria-label', 'Refresh notes tree');
-    refreshButton.textContent = '↻';
-    notesTreeRoot.appendChild(refreshButton);
-
-    const sortButton = document.createElement('button');
-    sortButton.type = 'button';
-    sortButton.className = 'notes-tree-sort-button';
-    sortButton.dataset.action = 'show-notes-tree-sort-menu';
-    sortButton.title = notesTreeSortSummary();
-    sortButton.setAttribute('aria-label', 'Sort notes tree');
-    sortButton.textContent = '⇅';
-    notesTreeRoot.appendChild(sortButton);
-  }
 }
 
 function notesTreeRainbowColorForIndex(index) {
   return NOTES_TREE_RAINBOW_COLORS[index % NOTES_TREE_RAINBOW_COLORS.length];
+}
+
+function countNotesTreeFiles(node) {
+  if (!node) return 0;
+  if (node.type === 'file') return 1;
+  return (node.children || []).reduce((total, child) => total + countNotesTreeFiles(child), 0);
 }
 
 function renderNotesTreeNode(node, depth = 0, inheritedColor = '', siblingIndex = 0) {
@@ -2312,12 +3016,15 @@ function renderNotesTreeNode(node, depth = 0, inheritedColor = '', siblingIndex 
   row.style.setProperty('--depth', String(depth));
   row.dataset.path = node.path;
   row.dataset.type = node.type;
-  const rowColor = notesTreeRainbowFolders
-    ? (depth === 1 && node.type === 'folder' ? notesTreeRainbowColorForIndex(siblingIndex) : inheritedColor)
-    : '';
+  let rowColor = '';
+  if (notesTreeColourMode === 'rainbow') {
+    rowColor = depth === 1 && node.type === 'folder' ? notesTreeRainbowColorForIndex(siblingIndex) : inheritedColor;
+  } else if (notesTreeColourMode === 'manual') {
+    rowColor = depth === 1 && node.type === 'folder' ? notesTreeFolderColour(node.path) : inheritedColor;
+  }
   if (rowColor) {
-    row.classList.add('rainbow');
-    row.style.setProperty('--notes-tree-rainbow-color', rowColor);
+    row.classList.add('coloured');
+    row.style.setProperty('--notes-tree-item-color', rowColor);
   }
 
   if (node.type === 'folder') {
@@ -2340,6 +3047,13 @@ function renderNotesTreeNode(node, depth = 0, inheritedColor = '', siblingIndex 
     const emoji = notesTreeFolderEmoji(node.path);
     label.textContent = `${emoji ? `${emoji} ` : ''}${node.name}`;
     row.appendChild(label);
+
+    if (notesTreeShowCounts) {
+      const count = document.createElement('span');
+      count.className = 'notes-tree-count-pill';
+      count.textContent = String(countNotesTreeFiles(node));
+      row.appendChild(count);
+    }
 
     const emojiButton = document.createElement('button');
     emojiButton.type = 'button';
@@ -2429,8 +3143,11 @@ function saveNotesTreePreference() {
     position: notesTreePosition,
     rootPath: notesTreeRootPath,
     folderEmojis: notesTreeFolderEmojis,
+    folderColours: notesTreeFolderColours,
     sort: notesTreeSort,
     rainbowFolders: notesTreeRainbowFolders,
+    colourMode: notesTreeColourMode,
+    showCounts: notesTreeShowCounts,
     zoom: notesTreeZoom,
     width: notesTreeWidth
   });
@@ -2472,11 +3189,13 @@ async function chooseNotesTreeRoot() {
   notesTreeRootPath = selected;
   notesTreeVisible = true;
   notesTreeExpandedPaths.clear();
+  tagManagerExpandedPaths.clear();
   notesTreeExpandedPaths.add(selected);
   updateSidePaneLayoutClasses();
   updateMenuChecks();
   saveNotesTreePreference();
   await refreshNotesTree();
+  await refreshTagManager();
 }
 
 function setNotesTreeVisible(enabled, options = {}) {
@@ -2499,11 +3218,23 @@ function setNotesTreePosition(position, options = {}) {
 }
 
 function setNotesTreeRainbowFolders(enabled, options = {}) {
+  setNotesTreeColourMode(enabled === true ? 'rainbow' : 'plain', options);
+}
+
+function setNotesTreeColourMode(mode, options = {}) {
   const persist = options.persist !== false;
-  notesTreeRainbowFolders = enabled === true;
+  notesTreeColourMode = ['plain', 'manual', 'rainbow'].includes(mode) ? mode : 'plain';
+  notesTreeRainbowFolders = notesTreeColourMode === 'rainbow';
   renderNotesTree();
   updateMenuChecks();
   notifyNativeMenuState();
+  if (persist) saveNotesTreePreference();
+}
+
+function setNotesTreeShowCounts(enabled, options = {}) {
+  const persist = options.persist !== false;
+  notesTreeShowCounts = enabled !== false;
+  renderNotesTree();
   if (persist) saveNotesTreePreference();
 }
 
@@ -2515,8 +3246,11 @@ async function loadNotesTreePreference() {
       position: 'left',
       rootPath: null,
       folderEmojis: {},
+      folderColours: {},
       sort: normalizeNotesTreeSortPreference(),
       rainbowFolders: false,
+      colourMode: 'plain',
+      showCounts: true,
       zoom: 1,
       width: NOTES_TREE_DEFAULT_WIDTH
     };
@@ -2526,10 +3260,115 @@ async function loadNotesTreePreference() {
     position: result.position === 'right' ? 'right' : 'left',
     rootPath: result.rootPath || null,
     folderEmojis: result.folderEmojis && typeof result.folderEmojis === 'object' ? result.folderEmojis : {},
+    folderColours: normalizeFolderColours(result.folderColours),
     sort: normalizeNotesTreeSortPreference(result.sort),
     rainbowFolders: result.rainbowFolders === true,
+    colourMode: ['plain', 'manual', 'rainbow'].includes(result.colourMode)
+      ? result.colourMode
+      : (result.rainbowFolders === true ? 'rainbow' : 'plain'),
+    showCounts: result.showCounts !== false,
     zoom: clampNotesTreeZoom(result.zoom),
     width: clampNotesTreeWidth(result.width)
+  };
+}
+
+function saveTagManagerPreference() {
+  void window.nativeApi.saveTagManagerPreference({
+    visible: tagManagerVisible,
+    position: tagManagerPosition,
+    showFiles: tagManagerShowFiles,
+    showCounts: tagManagerShowCounts,
+    tagSettings: tagManagerTagSettings,
+    zoom: tagManagerZoom
+  });
+}
+
+async function refreshTagManager() {
+  if (!notesTreeRootPath) {
+    tagManagerData = [];
+    tagManagerError = '';
+    tagManagerTruncated = false;
+    tagManagerFilesScanned = 0;
+    tagManagerFileLimit = 0;
+    renderTagManager();
+    return;
+  }
+
+  tagManagerLoading = true;
+  tagManagerError = '';
+  renderTagManager();
+  const result = await window.nativeApi.readGlobalTags({ rootPath: notesTreeRootPath });
+  tagManagerLoading = false;
+  if (!result?.loaded) {
+    tagManagerData = [];
+    tagManagerError = result?.error || 'Unable to load tags';
+    tagManagerTruncated = false;
+    tagManagerFilesScanned = 0;
+    tagManagerFileLimit = 0;
+  } else {
+    tagManagerData = Array.isArray(result.tags) ? result.tags : [];
+    tagManagerError = '';
+    tagManagerTruncated = result.truncated === true;
+    tagManagerFilesScanned = Number(result.filesScanned || 0);
+    tagManagerFileLimit = Number(result.fileLimit || 0);
+    if (tagManagerExpandedPaths.size === 0) {
+      const tree = buildTagTree(tagManagerData);
+      for (const child of sortedTagChildren(tree)) {
+        if (child.children.size > 0) tagManagerExpandedPaths.add(child.path);
+      }
+    }
+  }
+  renderTagManager();
+}
+
+function setTagManagerVisible(enabled, options = {}) {
+  const persist = options.persist !== false;
+  tagManagerVisible = enabled === true;
+  updateSidePaneLayoutClasses();
+  renderTagManager();
+  updateMenuChecks();
+  notifyNativeMenuState();
+  if (persist) saveTagManagerPreference();
+  if (tagManagerVisible && tagManagerData.length === 0 && !tagManagerLoading) {
+    void refreshTagManager();
+  }
+}
+
+function setTagManagerPosition(position, options = {}) {
+  const persist = options.persist !== false;
+  tagManagerPosition = position === 'left' ? 'left' : 'right';
+  updateSidePaneLayoutClasses();
+  updateMenuChecks();
+  notifyNativeMenuState();
+  if (persist) saveTagManagerPreference();
+}
+
+function setTagManagerShowFiles(enabled, options = {}) {
+  const persist = options.persist !== false;
+  tagManagerShowFiles = enabled === true;
+  renderTagManager();
+  if (persist) saveTagManagerPreference();
+}
+
+function setTagManagerShowCounts(enabled, options = {}) {
+  const persist = options.persist !== false;
+  tagManagerShowCounts = enabled !== false;
+  renderTagManager();
+  if (persist) saveTagManagerPreference();
+}
+
+async function loadTagManagerPreference() {
+  const result = await window.nativeApi.loadTagManagerPreference();
+  if (!result?.loaded) {
+    return { visible: false, position: 'right', showFiles: false, showCounts: true, tagSettings: {}, zoom: 1 };
+  }
+  return {
+    visible: result.visible === true,
+    position: result.position === 'left' ? 'left' : 'right',
+    showFiles: result.showFiles === true,
+    showCounts: result.showCounts !== false,
+    tagSettings: normalizeTagSettings(result.tagSettings),
+    zoom: clampTagManagerZoom(result.zoom)
   };
 }
 
@@ -2579,7 +3418,11 @@ function scrollRawToLine(lineNumber) {
   const clamped = Math.max(0, Math.min(offset, text.length));
   rawEditor.focus({ preventScroll: true });
   rawEditor.setSelectionRange(clamped, clamped);
-  rawEditor.scrollTop = rawEditor.scrollHeight * (clamped / Math.max(1, text.length));
+  if (typeof rawEditor.scrollToPosition === 'function') {
+    rawEditor.scrollToPosition(clamped, 'start');
+  } else {
+    rawEditor.scrollTop = rawEditor.scrollHeight * (clamped / Math.max(1, text.length));
+  }
 }
 
 function jumpToOutlineItem(item) {
@@ -2628,6 +3471,19 @@ function commandPaletteCommands() {
     { label: 'View: Toggle Outline', action: 'toggle-outline-view' },
     { label: 'View: Outline Left', action: 'outline-left' },
     { label: 'View: Outline Right', action: 'outline-right' },
+    { label: 'View: Toggle Tag Manager', action: 'toggle-tag-manager-view' },
+    { label: 'View: Tag Manager Left', action: 'tag-manager-left' },
+    { label: 'View: Tag Manager Right', action: 'tag-manager-right' },
+    { label: 'View: Tag Network...', action: 'open-tag-network' },
+    { label: 'View: Tags Zoom In', action: 'zoom-tag-manager-in' },
+    { label: 'View: Tags Zoom Out', action: 'zoom-tag-manager-out' },
+    { label: 'View: Reset Tags Zoom', action: 'zoom-tag-manager-reset' },
+    { label: 'View: Refresh Tags', action: 'refresh-tag-manager' },
+    { label: 'View: Toggle Tag Counts', action: 'toggle-tag-manager-counts' },
+    { label: 'View: Toggle Notes Counts', action: 'toggle-notes-tree-counts' },
+    { label: 'View: Notes Colours Plain', action: 'set-notes-tree-colour-mode', payload: { mode: 'plain' } },
+    { label: 'View: Notes Colours Manual', action: 'set-notes-tree-colour-mode', payload: { mode: 'manual' } },
+    { label: 'View: Notes Colours Rainbow', action: 'set-notes-tree-colour-mode', payload: { mode: 'rainbow' } },
     { label: 'View: Syncronise Views', action: 'toggle-sync-views' },
     { label: 'View: Toggle Word Wrap', action: 'toggle-word-wrap' },
     { label: 'View: Toggle Line Numbers', action: 'toggle-line-numbers' },
@@ -2765,10 +3621,18 @@ function updateMenuChecks() {
   const outlineToggle = document.querySelector('[data-toggle="outline-view"]');
   const outlineLeftToggle = document.querySelector('[data-toggle="outline-left"]');
   const outlineRightToggle = document.querySelector('[data-toggle="outline-right"]');
+  const tagManagerToggle = document.querySelector('[data-toggle="tag-manager-view"]');
+  const tagManagerLeftToggle = document.querySelector('[data-toggle="tag-manager-left"]');
+  const tagManagerRightToggle = document.querySelector('[data-toggle="tag-manager-right"]');
+  const tagManagerCountsToggle = document.querySelector('[data-toggle="tag-manager-counts"]');
   const notesTreeToggle = document.querySelector('[data-toggle="notes-tree-view"]');
   const notesTreeLeftToggle = document.querySelector('[data-toggle="notes-tree-left"]');
   const notesTreeRightToggle = document.querySelector('[data-toggle="notes-tree-right"]');
   const notesTreeRainbowToggle = document.querySelector('[data-toggle="notes-tree-rainbow"]');
+  const notesTreeColourPlainToggle = document.querySelector('[data-toggle="notes-tree-colour-plain"]');
+  const notesTreeColourManualToggle = document.querySelector('[data-toggle="notes-tree-colour-manual"]');
+  const notesTreeColourRainbowToggle = document.querySelector('[data-toggle="notes-tree-colour-rainbow"]');
+  const notesTreeCountsToggle = document.querySelector('[data-toggle="notes-tree-counts"]');
   const exportHtmlDefault = document.querySelector('[data-toggle="export-html-default"]');
   const exportHtmlArticle = document.querySelector('[data-toggle="export-html-article"]');
   const exportHtmlCompact = document.querySelector('[data-toggle="export-html-compact"]');
@@ -2817,13 +3681,33 @@ function updateMenuChecks() {
   if (outlineRightToggle) outlineRightToggle.classList.toggle('checked', outlinePosition === 'right');
   if (outlineLeftToggle) outlineLeftToggle.disabled = !outlineVisible;
   if (outlineRightToggle) outlineRightToggle.disabled = !outlineVisible;
+  if (tagManagerToggle) tagManagerToggle.classList.toggle('checked', tagManagerVisible);
+  if (tagManagerLeftToggle) tagManagerLeftToggle.classList.toggle('checked', tagManagerPosition === 'left');
+  if (tagManagerRightToggle) tagManagerRightToggle.classList.toggle('checked', tagManagerPosition === 'right');
+  if (tagManagerLeftToggle) tagManagerLeftToggle.disabled = !tagManagerVisible;
+  if (tagManagerRightToggle) tagManagerRightToggle.disabled = !tagManagerVisible;
+  if (tagManagerCountsToggle) tagManagerCountsToggle.classList.toggle('checked', tagManagerShowCounts);
+  if (tagManagerCountsToggle) tagManagerCountsToggle.disabled = !tagManagerVisible;
   if (notesTreeToggle) notesTreeToggle.classList.toggle('checked', notesTreeVisible);
   if (notesTreeLeftToggle) notesTreeLeftToggle.classList.toggle('checked', notesTreePosition === 'left');
   if (notesTreeRightToggle) notesTreeRightToggle.classList.toggle('checked', notesTreePosition === 'right');
   if (notesTreeRainbowToggle) notesTreeRainbowToggle.classList.toggle('checked', notesTreeRainbowFolders);
+  if (notesTreeColourPlainToggle) notesTreeColourPlainToggle.classList.toggle('checked', notesTreeColourMode === 'plain');
+  if (notesTreeColourManualToggle) notesTreeColourManualToggle.classList.toggle('checked', notesTreeColourMode === 'manual');
+  if (notesTreeColourRainbowToggle) notesTreeColourRainbowToggle.classList.toggle('checked', notesTreeColourMode === 'rainbow');
   if (notesTreeLeftToggle) notesTreeLeftToggle.disabled = !notesTreeVisible;
   if (notesTreeRightToggle) notesTreeRightToggle.disabled = !notesTreeVisible;
   if (notesTreeRainbowToggle) notesTreeRainbowToggle.disabled = !notesTreeVisible;
+  if (notesTreeColourPlainToggle) notesTreeColourPlainToggle.disabled = !notesTreeVisible;
+  if (notesTreeColourManualToggle) notesTreeColourManualToggle.disabled = !notesTreeVisible;
+  if (notesTreeColourRainbowToggle) notesTreeColourRainbowToggle.disabled = !notesTreeVisible;
+  if (notesTreeCountsToggle) notesTreeCountsToggle.classList.toggle('checked', notesTreeShowCounts);
+  if (notesTreeCountsToggle) notesTreeCountsToggle.disabled = !notesTreeVisible;
+  if (notesTreeRefreshButton) notesTreeRefreshButton.disabled = !notesTreeRootPath;
+  if (notesTreeSortButton) {
+    notesTreeSortButton.disabled = !notesTreeRootPath;
+    notesTreeSortButton.title = notesTreeSortSummary();
+  }
   if (exportHtmlDefault) exportHtmlDefault.classList.toggle('checked', exportHtmlPreset === 'default');
   if (exportHtmlArticle) exportHtmlArticle.classList.toggle('checked', exportHtmlPreset === 'article');
   if (exportHtmlCompact) exportHtmlCompact.classList.toggle('checked', exportHtmlPreset === 'compact');
@@ -2871,9 +3755,14 @@ function notifyNativeMenuState() {
     mermaidPreviewEnabled,
     outlineVisible,
     outlinePosition,
+    tagManagerVisible,
+    tagManagerPosition,
+    tagManagerShowCounts,
     notesTreeVisible,
     notesTreePosition,
     notesTreeRainbowFolders,
+    notesTreeColourMode,
+    notesTreeShowCounts,
     exportHtmlPreset,
     exportPdfPreset,
     exportDocxPreset,
@@ -3027,6 +3916,7 @@ function redoRaw() {
 
 function applyRawZoom() {
   rawEditor.style.fontSize = `${14 * rawZoom}px`;
+  rawEditorHost?.style.setProperty('--raw-editor-font-size', `${14 * rawZoom}px`);
   updateLineNumbers({ force: true });
 }
 
@@ -3037,6 +3927,7 @@ function applyEditorFont() {
     serif: "Georgia, 'Times New Roman', serif"
   };
   rawEditor.style.fontFamily = fontStacks[editorFont] || fontStacks['system-mono'];
+  rawEditorHost?.style.setProperty('--raw-editor-font-family', fontStacks[editorFont] || fontStacks['system-mono']);
   if (rawLineNumberList) {
     rawLineNumberList.style.fontFamily = fontStacks['system-mono'];
   }
@@ -3088,7 +3979,7 @@ function setSplitOrientation(nextOrientation) {
 }
 
 function applySpellcheckSetting() {
-  rawEditor.spellcheck = spellcheckEnabled;
+  rawEditor.setSpellcheck?.(spellcheckEnabled);
   const doc = frame.contentDocument;
   if (!doc?.body) return;
   doc.body.spellcheck = spellcheckEnabled;
@@ -3121,6 +4012,9 @@ function setDarkMode(enabled, options = {}) {
   const persist = options.persist !== false;
   darkMode = enabled;
   body.classList.toggle('dark-content', darkMode);
+  body.classList.toggle('theme-dark', darkMode);
+  body.classList.toggle('theme-light', !darkMode);
+  rawEditor.setDarkMode?.(darkMode);
   for (const button of ribbonThemeModeButtons) {
     button.classList.toggle('checked', button.dataset.themeMode === darkModeMode);
   }
@@ -3283,7 +4177,7 @@ function setSyncViewsEnabled(enabled, options = {}) {
 function setWordWrapEnabled(enabled, options = {}) {
   const persist = options.persist !== false;
   wordWrapEnabled = enabled === true;
-  rawEditor.wrap = wordWrapEnabled ? 'soft' : 'off';
+  rawEditor.setWordWrap?.(wordWrapEnabled);
   updateLineNumbers({ force: true });
   if (persist) {
     void window.nativeApi.saveWordWrapPreference({ enabled: wordWrapEnabled });
@@ -3298,7 +4192,8 @@ function setLineNumbersEnabled(enabled, options = {}) {
   if (rawEditorShell) {
     rawEditorShell.classList.toggle('line-numbers-visible', lineNumbersEnabled);
   }
-  if (lineNumbersEnabled) updateLineNumbers({ force: true });
+  rawEditor.setLineNumbers?.(lineNumbersEnabled);
+  updateLineNumbers({ force: true });
   if (persist) {
     void window.nativeApi.saveLineNumbersPreference({ enabled: lineNumbersEnabled });
   }
@@ -3313,6 +4208,7 @@ function setCollapsibleTextEnabled(enabled, options = {}) {
   if (!collapsibleTextEnabled) {
     activeRawFolds = [];
   }
+  rawEditor.setCollapsibleText?.(collapsibleTextEnabled);
   applyRawEditorDisplay();
   if (persist) {
     void window.nativeApi.saveCollapsibleTextPreference({ enabled: collapsibleTextEnabled });
@@ -4579,7 +5475,7 @@ function renderFromMarkdown(source) {
   const html = md.render(split.body, { bodyLineOffset: split.bodyLineOffset || 0 });
 
   if (html !== lastRenderedHtml) {
-    if (!suppressRawHandler && document.activeElement !== rawEditor) {
+    if (!suppressRawHandler && !rawEditor.isFocused?.()) {
       suppressRawHandler = true;
       pruneRawFolds();
       rawEditor.value = activeRawFolds.length > 0 ? buildRawEditorDisplay() : markdownState;
@@ -5638,7 +6534,11 @@ function selectFindMatch(match, index, total) {
   rawEditor.focus({ preventScroll: true });
   rawEditor.setSelectionRange(match.start, match.end);
   const text = rawEditor.value || '';
-  rawEditor.scrollTop = rawEditor.scrollHeight * (match.start / Math.max(1, text.length));
+  if (typeof rawEditor.scrollToPosition === 'function') {
+    rawEditor.scrollToPosition(match.start, 'center');
+  } else {
+    rawEditor.scrollTop = rawEditor.scrollHeight * (match.start / Math.max(1, text.length));
+  }
   updateFindStatus(`Match ${index + 1} of ${total}`);
 }
 
@@ -6338,8 +7238,29 @@ async function handleAction(action, payload = {}) {
     case 'clear-folder-emoji':
       saveFolderEmojiFromEditor({ clear: true });
       break;
+    case 'clear-folder-colour':
+      clearFolderColour();
+      break;
     case 'close-folder-emoji':
       closeFolderEmojiEditor();
+      break;
+    case 'save-tag-options':
+      saveTagOptionsFromEditor();
+      break;
+    case 'clear-tag-options':
+      saveTagOptionsFromEditor({ clear: true });
+      break;
+    case 'clear-tag-colour':
+      clearTagOptionsColour();
+      break;
+    case 'close-tag-options':
+      closeTagOptionsEditor();
+      break;
+    case 'open-tag-network':
+      await openTagNetworkModal();
+      break;
+    case 'close-tag-network':
+      closeTagNetworkModal();
       break;
     case 'restore-session':
       if (payload?.state) {
@@ -6442,6 +7363,15 @@ async function handleAction(action, payload = {}) {
       break;
     case 'zoom-notes-tree-reset':
       setNotesTreeZoom(1);
+      break;
+    case 'zoom-tag-manager-in':
+      setTagManagerZoom(tagManagerZoom + 0.1);
+      break;
+    case 'zoom-tag-manager-out':
+      setTagManagerZoom(tagManagerZoom - 0.1);
+      break;
+    case 'zoom-tag-manager-reset':
+      setTagManagerZoom(1);
       break;
     case 'export-mindmap-svg':
       await mindmapView.exportSvg();
@@ -6593,6 +7523,35 @@ async function handleAction(action, payload = {}) {
         setOutlinePosition(payload.position);
       }
       break;
+    case 'toggle-tag-manager-view':
+      setTagManagerVisible(!tagManagerVisible);
+      break;
+    case 'set-tag-manager-view':
+      setTagManagerVisible(Boolean(payload.enabled));
+      break;
+    case 'tag-manager-left':
+      setTagManagerPosition('left');
+      break;
+    case 'tag-manager-right':
+      setTagManagerPosition('right');
+      break;
+    case 'set-tag-manager-position':
+      if (payload.position === 'left' || payload.position === 'right') {
+        setTagManagerPosition(payload.position);
+      }
+      break;
+    case 'refresh-tag-manager':
+      await refreshTagManager();
+      break;
+    case 'toggle-tag-manager-files':
+      setTagManagerShowFiles(!tagManagerShowFiles);
+      break;
+    case 'toggle-tag-manager-counts':
+      setTagManagerShowCounts(!tagManagerShowCounts);
+      break;
+    case 'set-tag-manager-counts':
+      setTagManagerShowCounts(Boolean(payload.enabled));
+      break;
     case 'toggle-notes-tree-view':
       setNotesTreeVisible(!notesTreeVisible);
       break;
@@ -6616,11 +7575,21 @@ async function handleAction(action, payload = {}) {
     case 'set-notes-tree-rainbow':
       setNotesTreeRainbowFolders(Boolean(payload.enabled));
       break;
+    case 'set-notes-tree-colour-mode':
+      setNotesTreeColourMode(payload.mode);
+      break;
+    case 'toggle-notes-tree-counts':
+      setNotesTreeShowCounts(!notesTreeShowCounts);
+      break;
+    case 'set-notes-tree-counts':
+      setNotesTreeShowCounts(Boolean(payload.enabled));
+      break;
     case 'choose-notes-tree-root':
       await chooseNotesTreeRoot();
       break;
     case 'refresh-notes-tree':
       await refreshNotesTree();
+      await refreshTagManager();
       break;
     case 'toggle-dark-mode':
       await setDarkModeMode(darkModeMode === 'light' ? 'dark' : darkModeMode === 'dark' ? 'auto' : 'light');
@@ -6733,6 +7702,38 @@ function wireMenus() {
     });
   }
 
+  if (tagManagerPane) {
+    tagManagerPane.addEventListener('click', (event) => {
+      const target = event.target;
+      const button = target.closest('button[data-action]');
+      if (!button) return;
+      const action = button.dataset.action;
+      const tag = button.dataset.tag || '';
+
+      if (action === 'toggle-tag-manager-node') {
+        if (tagManagerExpandedPaths.has(tag)) tagManagerExpandedPaths.delete(tag);
+        else tagManagerExpandedPaths.add(tag);
+        renderTagManager();
+        return;
+      }
+
+      if (action === 'copy-tag-manager-tag' && tag) {
+        insertMarkdownAtCursor(`#${tag}`);
+        return;
+      }
+
+      if (action === 'open-tag-options' && tag) {
+        openTagOptionsEditor(tag);
+        return;
+      }
+
+      if (action === 'open-tag-manager-file') {
+        const filePath = button.dataset.path || '';
+        if (filePath) void loadFileByPath(filePath, 'opening a note from the tag manager');
+      }
+    });
+  }
+
   if (notesTreePane) {
     notesTreePane.addEventListener('contextmenu', (event) => {
       const row = event.target.closest('.notes-tree-row[data-type="file"][data-path]');
@@ -6818,6 +7819,32 @@ function wireMenus() {
         event.preventDefault();
         closeFolderEmojiEditor();
       }
+    });
+  }
+
+  if (folderColourInput) {
+    folderColourInput.addEventListener('input', () => {
+      delete folderColourInput.dataset.cleared;
+    });
+  }
+
+  if (tagOptionsEmojiInput) {
+    tagOptionsEmojiInput.addEventListener('keydown', (event) => {
+      if (event.key === 'Enter') {
+        event.preventDefault();
+        saveTagOptionsFromEditor();
+        return;
+      }
+      if (event.key === 'Escape') {
+        event.preventDefault();
+        closeTagOptionsEditor();
+      }
+    });
+  }
+
+  if (tagOptionsColorInput) {
+    tagOptionsColorInput.addEventListener('input', () => {
+      delete tagOptionsColorInput.dataset.cleared;
     });
   }
 
@@ -7009,7 +8036,7 @@ function wireEvents() {
     const rawEditorResizeObserver = new ResizeObserver(() => {
       updateLineNumbers({ force: true });
     });
-    rawEditorResizeObserver.observe(rawEditor);
+    rawEditorResizeObserver.observe(rawEditorHost);
   }
 
   rawEditor.addEventListener('input', handleRawEdit);
@@ -7355,11 +8382,24 @@ function bootstrap() {
     setOutlineVisible(savedOutline.visible, { persist: false });
     diagnosticLog('renderer.startup.outline.loaded', savedOutline);
 
+    const savedTagManager = await loadTagManagerPreference();
+    tagManagerTagSettings = savedTagManager.tagSettings;
+    tagManagerZoom = savedTagManager.zoom;
+    applyTagManagerZoom();
+    setTagManagerShowFiles(savedTagManager.showFiles, { persist: false });
+    setTagManagerShowCounts(savedTagManager.showCounts, { persist: false });
+    setTagManagerPosition(savedTagManager.position, { persist: false });
+    setTagManagerVisible(savedTagManager.visible, { persist: false });
+    diagnosticLog('renderer.startup.tag-manager.loaded', savedTagManager);
+
     const savedNotesTree = await loadNotesTreePreference();
     notesTreeRootPath = savedNotesTree.rootPath;
     notesTreeFolderEmojis = savedNotesTree.folderEmojis;
+    notesTreeFolderColours = savedNotesTree.folderColours;
     notesTreeSort = savedNotesTree.sort;
-    notesTreeRainbowFolders = savedNotesTree.rainbowFolders;
+    notesTreeColourMode = savedNotesTree.colourMode;
+    notesTreeRainbowFolders = notesTreeColourMode === 'rainbow';
+    notesTreeShowCounts = savedNotesTree.showCounts;
     notesTreeZoom = savedNotesTree.zoom;
     notesTreeWidth = savedNotesTree.width;
     applyNotesTreeZoom();
@@ -7367,6 +8407,7 @@ function bootstrap() {
     setNotesTreePosition(savedNotesTree.position, { persist: false });
     setNotesTreeVisible(savedNotesTree.visible, { persist: false });
     await refreshNotesTree();
+    if (tagManagerVisible) await refreshTagManager();
     diagnosticLog('renderer.startup.notes-tree.loaded', savedNotesTree);
 
     await loadSavedThemeOnStartup();

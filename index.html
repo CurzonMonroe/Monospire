@@ -109,6 +109,10 @@
             <button data-action="zoom-notes-tree-in">Notes Tree Zoom In</button>
             <button data-action="zoom-notes-tree-out">Notes Tree Zoom Out</button>
             <button data-action="zoom-notes-tree-reset">Reset Notes Tree Zoom</button>
+            <div class="menu-subheader">Tags</div>
+            <button data-action="zoom-tag-manager-in">Tags Zoom In</button>
+            <button data-action="zoom-tag-manager-out">Tags Zoom Out</button>
+            <button data-action="zoom-tag-manager-reset">Reset Tags Zoom</button>
             <div class="menu-separator"></div>
             <button data-action="toggle-sync-views" data-toggle="sync-views">Syncronise Views</button>
             <button data-action="toggle-word-wrap" data-toggle="word-wrap">Word Wrap</button>
@@ -120,10 +124,20 @@
             <button data-action="outline-left" data-toggle="outline-left">Outline Left</button>
             <button data-action="outline-right" data-toggle="outline-right">Outline Right</button>
             <div class="menu-separator"></div>
+            <button data-action="toggle-tag-manager-view" data-toggle="tag-manager-view">Show Tag Manager</button>
+            <button data-action="tag-manager-left" data-toggle="tag-manager-left">Tag Manager Left</button>
+            <button data-action="tag-manager-right" data-toggle="tag-manager-right">Tag Manager Right</button>
+            <button data-action="toggle-tag-manager-counts" data-toggle="tag-manager-counts">Display Tag Counts</button>
+            <button data-action="refresh-tag-manager">Refresh Tags</button>
+            <button data-action="open-tag-network">Tag Network...</button>
+            <div class="menu-separator"></div>
             <button data-action="toggle-notes-tree-view" data-toggle="notes-tree-view">Show Notes Tree</button>
             <button data-action="notes-tree-left" data-toggle="notes-tree-left">Notes Tree Left</button>
             <button data-action="notes-tree-right" data-toggle="notes-tree-right">Notes Tree Right</button>
-            <button data-action="toggle-notes-tree-rainbow" data-toggle="notes-tree-rainbow">Rainbow Coloured Folders</button>
+            <button data-action="set-notes-tree-colour-mode" data-mode="plain" data-toggle="notes-tree-colour-plain">Plain Folder Colours</button>
+            <button data-action="set-notes-tree-colour-mode" data-mode="manual" data-toggle="notes-tree-colour-manual">Manual Folder Colours</button>
+            <button data-action="set-notes-tree-colour-mode" data-mode="rainbow" data-toggle="notes-tree-colour-rainbow">Rainbow Folder Colours</button>
+            <button data-action="toggle-notes-tree-counts" data-toggle="notes-tree-counts">Display Notes Counts</button>
             <button data-action="choose-notes-tree-root">Choose Notes Folder...</button>
             <div class="menu-separator"></div>
             <button data-action="horizontal-view" data-toggle="horizontal-view">Horizontal View</button>
@@ -255,7 +269,7 @@
             <div id="raw-fold-gutter" class="raw-fold-gutter" aria-label="Markdown folding controls">
               <div id="raw-fold-list" class="raw-fold-list"></div>
             </div>
-            <textarea id="raw-editor" wrap="off" spellcheck="true" aria-label="Raw Markdown editor" placeholder="Start writing Markdown..."></textarea>
+            <div id="raw-editor" class="raw-editor" role="textbox" aria-label="Raw Markdown editor"></div>
           </div>
         </section>
 
@@ -289,9 +303,24 @@
           <div id="toc-list" class="toc-list"></div>
         </aside>
 
+        <aside id="tag-manager-pane" class="pane pane-tag-manager no-drag" aria-label="Tag manager">
+          <div class="tag-manager-header pane-header pane-header-tag-manager">
+            <span>Tags</span>
+            <span class="pane-header-actions">
+              <button type="button" id="tag-manager-refresh-button" class="pane-header-button" data-action="refresh-tag-manager" title="Refresh tags" aria-label="Refresh tags">↻</button>
+              <button type="button" id="tag-manager-files-toggle" class="pane-header-button pane-header-text-button" data-action="toggle-tag-manager-files" title="Show files under tags" aria-label="Show files under tags" aria-pressed="false">Files</button>
+            </span>
+          </div>
+          <div id="tag-manager-list" class="tag-manager-list"></div>
+        </aside>
+
         <aside id="notes-tree-pane" class="pane pane-notes-tree no-drag" aria-label="Notes tree">
           <div class="notes-tree-header pane-header pane-header-notes-tree">
             <span>Notes</span>
+            <span class="pane-header-actions">
+              <button type="button" id="notes-tree-refresh-button" class="pane-header-button" data-action="refresh-notes-tree" title="Refresh notes tree" aria-label="Refresh notes tree">↻</button>
+              <button type="button" id="notes-tree-sort-button" class="pane-header-button" data-action="show-notes-tree-sort-menu" title="Sort notes tree" aria-label="Sort notes tree">⇅</button>
+            </span>
           </div>
           <div id="notes-tree-root" class="notes-tree-root"></div>
           <div id="notes-tree-list" class="notes-tree-list"></div>
@@ -434,14 +463,22 @@
         </div>
       </div>
 
-      <div id="folder-emoji-modal" class="overlay-panel hidden no-drag" role="dialog" aria-modal="true" aria-label="Folder Emoji">
+      <div id="folder-emoji-modal" class="overlay-panel hidden no-drag" role="dialog" aria-modal="true" aria-label="Folder Options">
         <div class="overlay-backdrop" data-action="close-folder-emoji"></div>
         <div class="folder-emoji-sheet">
-          <div class="folder-emoji-header">Folder Emoji</div>
+          <div class="folder-emoji-header">Folder Options</div>
           <div class="folder-emoji-body">
             <label class="folder-emoji-label" for="folder-emoji-input">Emoji decoration</label>
             <input id="folder-emoji-input" class="folder-emoji-input" type="text" maxlength="8" autocomplete="off" />
             <div class="folder-emoji-hint">Enter one emoji. Leave blank to remove it.</div>
+            <div id="folder-colour-controls" class="folder-colour-controls">
+              <label class="folder-emoji-label" for="folder-colour-input">Folder colour</label>
+              <div class="folder-colour-row">
+                <input id="folder-colour-input" class="folder-colour-input" type="color" value="#4da1ff" />
+                <button type="button" data-action="clear-folder-colour">Clear colour</button>
+              </div>
+              <div class="folder-emoji-hint">Manual colours apply to top-level folders and their contents.</div>
+            </div>
           </div>
           <div class="folder-emoji-actions">
             <button data-action="clear-folder-emoji">Clear</button>
@@ -450,8 +487,50 @@
           </div>
         </div>
       </div>
+
+      <div id="tag-options-modal" class="overlay-panel hidden no-drag" role="dialog" aria-modal="true" aria-label="Tag Options">
+        <div class="overlay-backdrop" data-action="close-tag-options"></div>
+        <div class="tag-options-sheet">
+          <div id="tag-options-header" class="tag-options-header">Tag Options</div>
+          <div class="tag-options-body">
+            <label class="tag-options-label" for="tag-options-emoji-input">Emoji decoration</label>
+            <input id="tag-options-emoji-input" class="tag-options-emoji-input" type="text" maxlength="8" autocomplete="off" />
+            <label class="tag-options-label" for="tag-options-color-input">Tag colour</label>
+            <div class="tag-options-color-row">
+              <input id="tag-options-color-input" class="tag-options-color-input" type="color" value="#4da1ff" />
+              <button type="button" data-action="clear-tag-colour">Clear colour</button>
+            </div>
+            <label class="tag-options-check">
+              <input id="tag-options-network-input" type="checkbox" />
+              <span>Exclude from network graph</span>
+            </label>
+          </div>
+          <div class="tag-options-actions">
+            <button data-action="clear-tag-options">Clear</button>
+            <button data-action="save-tag-options">Save</button>
+            <button data-action="close-tag-options">Cancel</button>
+          </div>
+        </div>
+      </div>
+
+      <div id="tag-network-modal" class="overlay-panel hidden no-drag" role="dialog" aria-modal="true" aria-label="Tag Network">
+        <div class="overlay-backdrop" data-action="close-tag-network"></div>
+        <div class="tag-network-sheet">
+          <div class="tag-network-header">
+            <div>
+              <div class="tag-network-title">Tag Network</div>
+              <div id="tag-network-status" class="tag-network-status">No tags loaded</div>
+            </div>
+            <button type="button" class="tag-network-close" data-action="close-tag-network" aria-label="Close tag network">Close</button>
+          </div>
+          <div class="tag-network-stage">
+            <svg id="tag-network-svg" class="tag-network-svg" role="img" aria-label="Tag network graph"></svg>
+          </div>
+        </div>
+      </div>
     </div>
 
+    <script src="./vendor/codemirror-editor.bundle.js"></script>
     <script src="./renderer.js"></script>
   </body>
 </html>

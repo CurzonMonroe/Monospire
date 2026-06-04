@@ -47,8 +47,10 @@ const MIN_WINDOW_BOUNDS = {
   height: 660
 };
 const NOTES_TREE_FILE_EXTENSIONS = new Set(['.md', '.markdown', '.txt', '.mmap']);
+const TAG_MANAGER_FILE_EXTENSIONS = new Set(['.md', '.markdown', '.txt']);
 const NOTES_TREE_MAX_DEPTH = 8;
 const NOTES_TREE_MAX_ITEMS = 10000;
+const TAG_MANAGER_MAX_FILES = 5000;
 const NOTES_TREE_SORT_FIELDS = new Set(['name', 'created', 'modified']);
 const NOTES_TREE_SORT_DIRECTIONS = new Set(['asc', 'desc']);
 
@@ -381,6 +383,10 @@ function isNotesTreeFilePath(filePath) {
   return NOTES_TREE_FILE_EXTENSIONS.has(path.extname(String(filePath || '')).toLowerCase());
 }
 
+function isTagManagerFilePath(filePath) {
+  return TAG_MANAGER_FILE_EXTENSIONS.has(path.extname(String(filePath || '')).toLowerCase());
+}
+
 async function pathExists(filePath) {
   try {
     await fs.access(filePath);
@@ -490,7 +496,7 @@ async function buildNotesTreeNode(entryPath, rootPath, depth, budget, sortPrefer
     for (const entry of entries) {
       if (budget.count >= NOTES_TREE_MAX_ITEMS) break;
       if (entry.name.startsWith('.')) continue;
-      if (!entry.isDirectory() && !isNotesTreeFilePath(entry.name)) continue;
+      if (!entry.isDirectory() && !isTagManagerFilePath(entry.name)) continue;
       const child = await buildNotesTreeNode(path.join(entryPath, entry.name), rootPath, depth + 1, budget, sortPreference);
       if (child) childNodes.push(child);
     }
@@ -515,6 +521,86 @@ async function buildNotesTreeNode(entryPath, rootPath, depth, budget, sortPrefer
     createdMs: stats.birthtimeMs,
     modifiedMs: stats.mtimeMs
   };
+}
+
+function stripFencedMarkdownBlocks(source) {
+  return String(source || '').replace(/(^|\n)(`{3,}|~{3,})[^\n]*\n[\s\S]*?\n\2(?=\n|$)/g, '$1');
+}
+
+function extractMarkdownTagsFromContent(source) {
+  const text = stripFencedMarkdownBlocks(source);
+  const tags = [];
+  const regex = /#([A-Za-z0-9][A-Za-z0-9_/-]*[A-Za-z0-9]|[A-Za-z0-9])/g;
+  let match = regex.exec(text);
+  while (match) {
+    const start = match.index;
+    const before = start > 0 ? text[start - 1] : '';
+    const after = text[start + match[0].length] || '';
+    if (
+      before !== '\\'
+      && !/[A-Za-z0-9_/-]/.test(before)
+      && !/[A-Za-z0-9_/-]/.test(after)
+      && text[start + 1] !== ' '
+    ) {
+      const raw = match[1]
+        .split('/')
+        .map((part) => part.trim())
+        .filter(Boolean)
+        .join('/');
+      if (raw) tags.push(raw);
+    }
+    match = regex.exec(text);
+  }
+  return tags;
+}
+
+async function scanTagsInNotesFolder(rootPath, entryPath, depth, budget, tagMap) {
+  if (budget.files >= TAG_MANAGER_MAX_FILES) return;
+  let stats;
+  try {
+    stats = await fs.stat(entryPath);
+  } catch {
+    return;
+  }
+
+  const name = path.basename(entryPath);
+  if (name.startsWith('.') && entryPath !== rootPath) return;
+
+  if (stats.isDirectory()) {
+    if (depth >= NOTES_TREE_MAX_DEPTH) return;
+    let entries = [];
+    try {
+      entries = await fs.readdir(entryPath, { withFileTypes: true });
+    } catch {
+      return;
+    }
+    entries.sort((left, right) => left.name.localeCompare(right.name, undefined, { sensitivity: 'base', numeric: true }));
+    for (const entry of entries) {
+      if (budget.files >= TAG_MANAGER_MAX_FILES) break;
+      if (entry.name.startsWith('.')) continue;
+      if (!entry.isDirectory() && !isTagManagerFilePath(entry.name)) continue;
+      await scanTagsInNotesFolder(rootPath, path.join(entryPath, entry.name), depth + 1, budget, tagMap);
+    }
+    return;
+  }
+
+  if (!stats.isFile() || !isTagManagerFilePath(entryPath)) return;
+  budget.files += 1;
+  let content = '';
+  try {
+    content = await fs.readFile(entryPath, 'utf8');
+  } catch {
+    return;
+  }
+
+  const relativePath = path.relative(rootPath, entryPath);
+  for (const tag of extractMarkdownTagsFromContent(content)) {
+    const key = tag.toLowerCase();
+    const existing = tagMap.get(key) || { tag, count: 0, files: new Set() };
+    existing.count += 1;
+    existing.files.add(relativePath);
+    tagMap.set(key, existing);
+  }
 }
 
 function enqueueOpenFilePath(filePath) {
@@ -1112,6 +1198,14 @@ function buildAppMenu() {
                 { label: 'Zoom Out', click: () => sendMenuAction('zoom-notes-tree-out') },
                 { label: 'Reset Zoom', click: () => sendMenuAction('zoom-notes-tree-reset') }
               ]
+            },
+            {
+              label: 'Tags',
+              submenu: [
+                { label: 'Zoom In', click: () => sendMenuAction('zoom-tag-manager-in') },
+                { label: 'Zoom Out', click: () => sendMenuAction('zoom-tag-manager-out') },
+                { label: 'Reset Zoom', click: () => sendMenuAction('zoom-tag-manager-reset') }
+              ]
             }
           ]
         },
@@ -1174,6 +1268,42 @@ function buildAppMenu() {
         },
         { type: 'separator' },
         {
+          id: 'toggle-tag-manager',
+          label: 'Show Tag Manager',
+          type: 'checkbox',
+          checked: false,
+          click: (item) => sendMenuAction('set-tag-manager-view', { enabled: item.checked })
+        },
+        {
+          id: 'tag-manager-left',
+          label: 'Tag Manager Left',
+          type: 'radio',
+          click: () => sendMenuAction('set-tag-manager-position', { position: 'left' })
+        },
+        {
+          id: 'tag-manager-right',
+          label: 'Tag Manager Right',
+          type: 'radio',
+          checked: true,
+          click: () => sendMenuAction('set-tag-manager-position', { position: 'right' })
+        },
+        {
+          id: 'tag-manager-counts',
+          label: 'Display Tag Counts',
+          type: 'checkbox',
+          checked: true,
+          click: (item) => sendMenuAction('set-tag-manager-counts', { enabled: item.checked })
+        },
+        {
+          label: 'Refresh Tags',
+          click: () => sendMenuAction('refresh-tag-manager')
+        },
+        {
+          label: 'Tag Network...',
+          click: () => sendMenuAction('open-tag-network')
+        },
+        { type: 'separator' },
+        {
           id: 'toggle-notes-tree',
           label: 'Show Notes Tree',
           type: 'checkbox',
@@ -1194,11 +1324,30 @@ function buildAppMenu() {
           click: () => sendMenuAction('set-notes-tree-position', { position: 'right' })
         },
         {
-          id: 'notes-tree-rainbow',
-          label: 'Rainbow Coloured Folders',
+          id: 'notes-tree-colour-plain',
+          label: 'Plain Folder Colours',
+          type: 'radio',
+          checked: true,
+          click: () => sendMenuAction('set-notes-tree-colour-mode', { mode: 'plain' })
+        },
+        {
+          id: 'notes-tree-colour-manual',
+          label: 'Manual Folder Colours',
+          type: 'radio',
+          click: () => sendMenuAction('set-notes-tree-colour-mode', { mode: 'manual' })
+        },
+        {
+          id: 'notes-tree-colour-rainbow',
+          label: 'Rainbow Folder Colours',
+          type: 'radio',
+          click: () => sendMenuAction('set-notes-tree-colour-mode', { mode: 'rainbow' })
+        },
+        {
+          id: 'notes-tree-counts',
+          label: 'Display Notes Counts',
           type: 'checkbox',
-          checked: false,
-          click: (item) => sendMenuAction('set-notes-tree-rainbow', { enabled: item.checked })
+          checked: true,
+          click: (item) => sendMenuAction('set-notes-tree-counts', { enabled: item.checked })
         },
         {
           label: 'Choose Notes Folder...',
@@ -2504,6 +2653,37 @@ ipcMain.handle('load-outline-preference', async () => {
   return { loaded: true, visible, position };
 });
 
+ipcMain.handle('save-tag-manager-preference', async (_event, payload) => {
+  const visible = payload?.visible === true;
+  const position = payload?.position === 'left' ? 'left' : 'right';
+  const showFiles = payload?.showFiles === true;
+  const showCounts = payload?.showCounts !== false;
+  const tagSettings = payload?.tagSettings && typeof payload.tagSettings === 'object' ? payload.tagSettings : {};
+  const zoom = Number(payload?.zoom);
+  const normalizedZoom = Number.isFinite(zoom) ? Math.max(0.7, Math.min(2.2, zoom)) : 1;
+  const settings = await readSettings();
+  settings.tagManager = { visible, position, showFiles, showCounts, tagSettings, zoom: normalizedZoom };
+  await writeSettings(settings);
+  return { saved: true };
+});
+
+ipcMain.handle('load-tag-manager-preference', async () => {
+  const settings = await readSettings();
+  const stored = settings.tagManager;
+  if (!stored || typeof stored !== 'object') {
+    return { loaded: false, visible: false, position: 'right', showFiles: false, showCounts: true, zoom: 1 };
+  }
+
+  const visible = stored.visible === true;
+  const position = stored.position === 'left' ? 'left' : 'right';
+  const showFiles = stored.showFiles === true;
+  const showCounts = stored.showCounts !== false;
+  const tagSettings = stored.tagSettings && typeof stored.tagSettings === 'object' ? stored.tagSettings : {};
+  const storedZoom = Number(stored.zoom);
+  const zoom = Number.isFinite(storedZoom) ? Math.max(0.7, Math.min(2.2, storedZoom)) : 1;
+  return { loaded: true, visible, position, showFiles, showCounts, tagSettings, zoom };
+});
+
 ipcMain.handle('choose-notes-tree-root', async () => {
   const result = await dialog.showOpenDialog({
     title: 'Choose Notes Folder',
@@ -2512,6 +2692,39 @@ ipcMain.handle('choose-notes-tree-root', async () => {
 
   if (result.canceled || result.filePaths.length === 0) return null;
   return result.filePaths[0];
+});
+
+ipcMain.handle('read-global-tags', async (_event, payload) => {
+  const rootPath = payload?.rootPath;
+  if (!rootPath) return { loaded: false, error: 'No notes folder selected.', tags: [] };
+
+  try {
+    const resolvedRoot = path.resolve(rootPath);
+    const stats = await fs.stat(resolvedRoot);
+    if (!stats.isDirectory()) {
+      return { loaded: false, error: 'Notes folder is not a directory.', tags: [] };
+    }
+    const tagMap = new Map();
+    const budget = { files: 0 };
+    await scanTagsInNotesFolder(resolvedRoot, resolvedRoot, 0, budget, tagMap);
+    const tags = [...tagMap.values()]
+      .map((item) => ({
+        tag: item.tag,
+        count: item.count,
+        files: [...item.files].sort((left, right) => left.localeCompare(right, undefined, { sensitivity: 'base', numeric: true }))
+      }))
+      .sort((left, right) => left.tag.localeCompare(right.tag, undefined, { sensitivity: 'base', numeric: true }));
+    return {
+      loaded: true,
+      rootPath: resolvedRoot,
+      tags,
+      filesScanned: budget.files,
+      truncated: budget.files >= TAG_MANAGER_MAX_FILES,
+      fileLimit: TAG_MANAGER_MAX_FILES
+    };
+  } catch (error) {
+    return { loaded: false, error: String(error?.message || error || 'Unable to read tags.'), tags: [] };
+  }
 });
 
 ipcMain.handle('read-notes-tree', async (_event, payload) => {
@@ -2546,8 +2759,13 @@ ipcMain.handle('save-notes-tree-preference', async (_event, payload) => {
   const position = payload?.position === 'left' ? 'left' : 'right';
   const rootPath = typeof payload?.rootPath === 'string' && payload.rootPath.trim() ? payload.rootPath : null;
   const folderEmojis = payload?.folderEmojis && typeof payload.folderEmojis === 'object' ? payload.folderEmojis : {};
+  const folderColours = payload?.folderColours && typeof payload.folderColours === 'object' ? payload.folderColours : {};
   const sort = normalizeNotesTreeSortPreference(payload?.sort || stored.sort);
   const rainbowFolders = payload?.rainbowFolders === true;
+  const colourMode = ['plain', 'manual', 'rainbow'].includes(payload?.colourMode)
+    ? payload.colourMode
+    : (rainbowFolders ? 'rainbow' : (stored.colourMode || 'plain'));
+  const showCounts = payload?.showCounts !== false;
   const zoom = Number(payload?.zoom);
   const storedZoom = Number(stored.zoom);
   const normalizedZoom = Number.isFinite(zoom) ? Math.max(0.7, Math.min(2.2, zoom)) : storedZoom;
@@ -2560,8 +2778,11 @@ ipcMain.handle('save-notes-tree-preference', async (_event, payload) => {
     position,
     rootPath,
     folderEmojis,
+    folderColours,
     sort,
     rainbowFolders,
+    colourMode,
+    showCounts,
     zoom: Number.isFinite(normalizedZoom) ? normalizedZoom : 1,
     width: Number.isFinite(normalizedWidth) ? normalizedWidth : 270
   };
@@ -2579,8 +2800,11 @@ ipcMain.handle('load-notes-tree-preference', async () => {
       position: 'left',
       rootPath: null,
       folderEmojis: {},
+      folderColours: {},
       sort: normalizeNotesTreeSortPreference(),
       rainbowFolders: false,
+      colourMode: 'plain',
+      showCounts: true,
       zoom: 1,
       width: 270
     };
@@ -2592,8 +2816,13 @@ ipcMain.handle('load-notes-tree-preference', async () => {
     position: stored.position === 'right' ? 'right' : 'left',
     rootPath: typeof stored.rootPath === 'string' ? stored.rootPath : null,
     folderEmojis: stored.folderEmojis && typeof stored.folderEmojis === 'object' ? stored.folderEmojis : {},
+    folderColours: stored.folderColours && typeof stored.folderColours === 'object' ? stored.folderColours : {},
     sort: normalizeNotesTreeSortPreference(stored.sort),
     rainbowFolders: stored.rainbowFolders === true,
+    colourMode: ['plain', 'manual', 'rainbow'].includes(stored.colourMode)
+      ? stored.colourMode
+      : (stored.rainbowFolders === true ? 'rainbow' : 'plain'),
+    showCounts: stored.showCounts !== false,
     zoom: Number.isFinite(Number(stored.zoom)) ? Math.max(0.7, Math.min(2.2, Number(stored.zoom))) : 1,
     width: Number.isFinite(Number(stored.width)) ? Math.max(200, Math.min(520, Math.round(Number(stored.width)))) : 270
   };
@@ -3201,10 +3430,18 @@ ipcMain.on('update-menu-state', (event, payload) => {
   const outlineItem = menu.getMenuItemById('toggle-outline');
   const outlineLeftItem = menu.getMenuItemById('outline-left');
   const outlineRightItem = menu.getMenuItemById('outline-right');
+  const tagManagerItem = menu.getMenuItemById('toggle-tag-manager');
+  const tagManagerLeftItem = menu.getMenuItemById('tag-manager-left');
+  const tagManagerRightItem = menu.getMenuItemById('tag-manager-right');
+  const tagManagerCountsItem = menu.getMenuItemById('tag-manager-counts');
   const notesTreeItem = menu.getMenuItemById('toggle-notes-tree');
   const notesTreeLeftItem = menu.getMenuItemById('notes-tree-left');
   const notesTreeRightItem = menu.getMenuItemById('notes-tree-right');
   const notesTreeRainbowItem = menu.getMenuItemById('notes-tree-rainbow');
+  const notesTreeColourPlainItem = menu.getMenuItemById('notes-tree-colour-plain');
+  const notesTreeColourManualItem = menu.getMenuItemById('notes-tree-colour-manual');
+  const notesTreeColourRainbowItem = menu.getMenuItemById('notes-tree-colour-rainbow');
+  const notesTreeCountsItem = menu.getMenuItemById('notes-tree-counts');
   const templatesEnabledItem = menu.getMenuItemById('templates-enabled');
   const templatesEnabledToolsItem = menu.getMenuItemById('templates-enabled-tools');
   const exportHtmlDefault = menu.getMenuItemById('export-html-default');
@@ -3266,11 +3503,26 @@ ipcMain.on('update-menu-state', (event, payload) => {
   if (outlineRightItem && typeof payload.outlineVisible === 'boolean') outlineRightItem.enabled = payload.outlineVisible;
   if (outlineLeftItem && payload.outlinePosition === 'left') outlineLeftItem.checked = true;
   if (outlineRightItem && payload.outlinePosition === 'right') outlineRightItem.checked = true;
+  if (tagManagerItem && typeof payload.tagManagerVisible === 'boolean') tagManagerItem.checked = payload.tagManagerVisible;
+  if (tagManagerLeftItem && typeof payload.tagManagerVisible === 'boolean') tagManagerLeftItem.enabled = payload.tagManagerVisible;
+  if (tagManagerRightItem && typeof payload.tagManagerVisible === 'boolean') tagManagerRightItem.enabled = payload.tagManagerVisible;
+  if (tagManagerCountsItem && typeof payload.tagManagerVisible === 'boolean') tagManagerCountsItem.enabled = payload.tagManagerVisible;
+  if (tagManagerCountsItem && typeof payload.tagManagerShowCounts === 'boolean') tagManagerCountsItem.checked = payload.tagManagerShowCounts;
+  if (tagManagerLeftItem && payload.tagManagerPosition === 'left') tagManagerLeftItem.checked = true;
+  if (tagManagerRightItem && payload.tagManagerPosition === 'right') tagManagerRightItem.checked = true;
   if (notesTreeItem && typeof payload.notesTreeVisible === 'boolean') notesTreeItem.checked = payload.notesTreeVisible;
   if (notesTreeLeftItem && typeof payload.notesTreeVisible === 'boolean') notesTreeLeftItem.enabled = payload.notesTreeVisible;
   if (notesTreeRightItem && typeof payload.notesTreeVisible === 'boolean') notesTreeRightItem.enabled = payload.notesTreeVisible;
   if (notesTreeRainbowItem && typeof payload.notesTreeVisible === 'boolean') notesTreeRainbowItem.enabled = payload.notesTreeVisible;
+  if (notesTreeColourPlainItem && typeof payload.notesTreeVisible === 'boolean') notesTreeColourPlainItem.enabled = payload.notesTreeVisible;
+  if (notesTreeColourManualItem && typeof payload.notesTreeVisible === 'boolean') notesTreeColourManualItem.enabled = payload.notesTreeVisible;
+  if (notesTreeColourRainbowItem && typeof payload.notesTreeVisible === 'boolean') notesTreeColourRainbowItem.enabled = payload.notesTreeVisible;
+  if (notesTreeCountsItem && typeof payload.notesTreeVisible === 'boolean') notesTreeCountsItem.enabled = payload.notesTreeVisible;
   if (notesTreeRainbowItem && typeof payload.notesTreeRainbowFolders === 'boolean') notesTreeRainbowItem.checked = payload.notesTreeRainbowFolders;
+  if (notesTreeColourPlainItem && payload.notesTreeColourMode === 'plain') notesTreeColourPlainItem.checked = true;
+  if (notesTreeColourManualItem && payload.notesTreeColourMode === 'manual') notesTreeColourManualItem.checked = true;
+  if (notesTreeColourRainbowItem && payload.notesTreeColourMode === 'rainbow') notesTreeColourRainbowItem.checked = true;
+  if (notesTreeCountsItem && typeof payload.notesTreeShowCounts === 'boolean') notesTreeCountsItem.checked = payload.notesTreeShowCounts;
   if (notesTreeLeftItem && payload.notesTreePosition === 'left') notesTreeLeftItem.checked = true;
   if (notesTreeRightItem && payload.notesTreePosition === 'right') notesTreeRightItem.checked = true;
   if (templatesEnabledItem && typeof payload.templatesEnabled === 'boolean') templatesEnabledItem.checked = payload.templatesEnabled;
